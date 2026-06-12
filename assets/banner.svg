@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" role="img" aria-label="ZavetSec MailInspector">
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e151c"/>
+      <stop offset="1" stop-color="#0a0d10"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="78%" cy="0%" r="70%">
+      <stop offset="0" stop-color="#00ff88" stop-opacity="0.16"/>
+      <stop offset="0.6" stop-color="#00ff88" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="6%" cy="100%" r="60%">
+      <stop offset="0" stop-color="#00ff88" stop-opacity="0.08"/>
+      <stop offset="0.7" stop-color="#00ff88" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="scan" width="3" height="3" patternUnits="userSpaceOnUse">
+      <rect width="3" height="1" fill="#00ff88" opacity="0.03"/>
+    </pattern>
+    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00ff88" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#00ff88" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="340" fill="url(#panel)"/>
+  <rect width="1280" height="340" fill="url(#glow)"/>
+  <rect width="1280" height="340" fill="url(#glow2)"/>
+  <rect width="1280" height="340" fill="url(#scan)"/>
+  <rect x="0" y="0" width="6" height="340" fill="#00ff88"/>
+  <rect x="0.5" y="0.5" width="1279" height="339" fill="none" stroke="#1c2530" stroke-width="1"/>
+
+  <!-- brand eyebrow -->
+  <circle cx="60" cy="62" r="6" fill="#00ff88"/>
+  <text x="80" y="68" font-family="'Rajdhani','Segoe UI',Arial,sans-serif" font-size="22" letter-spacing="6" fill="#00ff88" font-weight="700">Z A V E T S E C   / /   D F I R   T O O L K I T</text>
+
+  <!-- title -->
+  <text x="56" y="160" font-family="'Rajdhani','Segoe UI',Arial,sans-serif" font-size="92" fill="#eef3f7" font-weight="700" letter-spacing="1">Mail<tspan fill="#00ff88">Inspector</tspan></text>
+
+  <!-- subtitle -->
+  <text x="60" y="210" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="22" fill="#9fb3c8">Phishing &amp; malware triage for .eml / .msg e-mail files</text>
+
+  <line x1="60" y1="240" x2="900" y2="240" stroke="url(#rule)" stroke-width="2"/>
+
+  <!-- terminal prompt -->
+  <text x="60" y="285" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="20" fill="#6b7785">$ </text>
+  <text x="84" y="285" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="20" fill="#c7d0d9">python ZavetSec-MailInspector.py suspicious.eml -o report.html</text>
+  <text x="60" y="315" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="20" fill="#6b7785"># </text>
+  <text x="84" y="315" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="20" fill="#ff2e4d" font-weight="700">VERDICT: MALICIOUS</text>
+  <text x="320" y="315" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="20" fill="#6b7785">(score 100/100)</text>
+
+  <!-- right-side severity chips -->
+  <g font-family="'Rajdhani','Segoe UI',Arial,sans-serif" font-size="16" font-weight="700" letter-spacing="1">
+    <rect x="1040" y="60" width="170" height="30" rx="5" fill="none" stroke="#ff2e4d" stroke-opacity="0.5"/>
+    <text x="1056" y="80" fill="#ff2e4d">CRITICAL</text>
+    <rect x="1040" y="100" width="170" height="30" rx="5" fill="none" stroke="#ff6b35" stroke-opacity="0.5"/>
+    <text x="1056" y="120" fill="#ff6b35">HIGH</text>
+    <rect x="1040" y="140" width="170" height="30" rx="5" fill="none" stroke="#ffcc00" stroke-opacity="0.5"/>
+    <text x="1056" y="160" fill="#ffcc00">MEDIUM</text>
+    <rect x="1040" y="180" width="170" height="30" rx="5" fill="none" stroke="#36c5ff" stroke-opacity="0.5"/>
+    <text x="1056" y="200" fill="#36c5ff">LOW</text>
+  </g>
+</svg>

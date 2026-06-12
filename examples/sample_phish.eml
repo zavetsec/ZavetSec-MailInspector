@@ -1,0 +1,50 @@
+Content-Type: multipart/mixed; boundary="===============7961381809174667576=="
+MIME-Version: 1.0
+Return-Path: <billing@payments-secure-update.xyz>
+Authentication-Results: mx.local;
+ spf=fail smtp.mailfrom=payments-secure-update.xyz; dkim=fail; dmarc=fail
+Received: from unknown (185.220.101.45) by relay.example-exit.net;
+ Mon, 9 Jun 2026 03:11:00 +0000
+From: "Account Security <support@paypal.com>"
+ <noreply@payments-secure-update.xyz>
+Reply-To: harvest@mail-collect.top
+To: user@example.com
+Subject: Urgent: your account has been suspended
+Message-ID: <abc123@evilsender.example>
+Date: Mon, 9 Jun 2026 03:11:00 +0000
+
+--===============7961381809174667576==
+Content-Type: text/html; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGJvZHk+CjxwPlVyZ2VudCEgWW91ciBhY2NvdW50IGhhcyBiZWVuIHN1c3BlbmRlZC4g
+UGxlYXNlIHZlcmlmeSB5b3VyIGFjY291bnQgaW1tZWRpYXRlbHkuPC9wPgo8cD5DbGljayBoZXJl
+OiA8YSBocmVmPSJodHRwOi8vMTg1LjIyMC4xMDEuNDUvbG9naW4/aWQ9dXNlciI+aHR0cHM6Ly93
+d3cucGF5cGFsLmNvbS9sb2dpbjwvYT48L3A+CjxwPkJhY2t1cCBsaW5rOiA8YSBocmVmPSJodHRw
+czovL3BheXBhbC5hY2NvdW50LXZlcmlmeS50b3AvYXV0aCI+dmVyaWZ5IG5vdzwvYT48L3A+Cjxw
+PlNob3J0IGxpbms6IGh0dHBzOi8vYml0Lmx5LzN4UGhpc2g8L3A+CjxpbWcgc3JjPSJodHRwOi8v
+dHJhY2suZXhhbXBsZS1iYWQuY29tL3AuZ2lmIiB3aWR0aD0iMSIgaGVpZ2h0PSIxIj4KPC9ib2R5
+PjwvaHRtbD4=
+
+--===============7961381809174667576==
+Content-Type: application/pdf
+MIME-Version: 1.0
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="Invoice_2026.pdf.exe"
+
+TVqQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVGhpcyBwcm9ncmFtIGNhbm5vdCBiZSBy
+dW4gaW4gRE9TIG1vZGU=
+
+--===============7961381809174667576==
+Content-Type: application/zip
+MIME-Version: 1.0
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="receipt.scr"
+
+UEsDBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+--===============7961381809174667576==--

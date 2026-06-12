@@ -1,0 +1,10 @@
+# ZavetSec-MailInspector — dependencies
+# ---------------------------------------------------------------------------
+# Core .eml analysis runs on the Python standard library ALONE.
+# The packages below unlock full functionality and are recommended for SOC use.
+# If any is missing, the tool degrades gracefully and reports what it skipped.
+# ---------------------------------------------------------------------------
+
+extract-msg>=0.45     # Outlook .msg parsing
+oletools>=0.60        # VBA macro detection in Office attachments (olevba)
+requests>=2.28        # optional online threat-intel enrichment (--online)
