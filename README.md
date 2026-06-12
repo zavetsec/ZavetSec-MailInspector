@@ -19,13 +19,51 @@ A single‑file, dependency‑light DFIR tool that turns a suspicious message in
 
 ## Why
 
-Abuse mailboxes fill up with forwarded `.eml`/`.msg` files, and an L1 analyst has to decide *fast* whether each one is harmless, suspicious, or an active attack. MailInspector automates that first pass: it parses the raw message, checks sender authentication and spoofing, weighs every link and attachment, scores the result, and hands back a verdict you can act on — plus a ready‑to‑block IOC list.
+Abuse mailboxes fill up with forwarded `.eml`/`.msg` files, and an L1 analyst has to decide *fast* whether each one is harmless, suspicious, or an active attack. MailInspector automates that first pass and hands back a verdict you can act on — plus a ready‑to‑block IOC list.
 
 - **Two formats, one tool** — RFC822 `.eml` *and* Outlook `.msg`.
 - **Runs anywhere** — `.eml` analysis needs **only the Python standard library**.
-- **Offline by default** — no network calls unless you explicitly pass `--online`.
-- **Air‑gap‑safe reports** — the HTML report references **zero external resources**: no CDNs, no remote fonts, no tracking. Safe to open on an isolated DFIR workstation, and it won't beacon when you view content derived from an attacker's e‑mail.
+- **Offline by default** — nothing leaves the machine unless you pass `--online`.
+- **Air‑gap‑safe reports** — the HTML report references **zero external resources** (no CDNs, no remote fonts, no tracking), so it won't beacon when you view content derived from an attacker's e‑mail.
 - **Automation‑friendly** — JSON output and meaningful exit codes for pipelines and auto‑triage.
+
+---
+
+## Report preview
+
+<div align="center">
+
+![MailInspector HTML report](assets/report-preview.png)
+
+*Self‑contained HTML report — verdict, scored findings, IOC block and delivery path. Renders fully offline.*
+
+</div>
+
+---
+
+## How it works
+
+```text
+        ┌─────────────┐
+        │  .eml / .msg │
+        └──────┬──────┘
+               ▼
+         ┌──────────┐     stdlib email  ·  extract-msg
+         │  Parser  │     headers · bodies · attachments
+         └────┬─────┘
+              ▼
+   ┌──────────────────────┐   AUTH · HEADER · URL
+   │      Detectors       │   BODY · ATTACH · (TI)
+   └──────────┬───────────┘
+              ▼
+        ┌───────────┐    weighted severities
+        │  Scoring  │    → CLEAN / SUSPICIOUS / MALICIOUS
+        └─────┬─────┘
+              ▼
+   ┌────────────────────────────────┐
+   │  HTML report · JSON · IOC list │  + exit code
+   └────────────────────────────────┘
+```
 
 ---
 
@@ -112,9 +150,7 @@ python ZavetSec-MailInspector.py examples/sample_phish.eml -o demo.html
   ...
 ```
 
-The HTML report renders all findings, the full URL and attachment tables, the delivery path, and a copy‑paste IOC block — styled in the ZavetSec dark/terminal aesthetic and fully self‑contained.
-
-> A rendered example ships at [`examples/sample_phish.eml`](examples/sample_phish.eml) — run the command above to generate the matching report.
+The HTML report renders all findings, the full URL and attachment tables, the delivery path, and a copy‑paste IOC block — styled in the ZavetSec dark/terminal aesthetic and fully self‑contained (see [report preview](#report-preview) above).
 
 ---
 
@@ -201,11 +237,14 @@ build\build.ps1
 
 ## Roadmap
 
+- [ ] **ARC** chain validation (`Authentication-Results` survivability across hops)
+- [ ] **S/MIME & PGP** detection — signature presence, validity, and signer/sender mismatch
+- [ ] **Attachment entropy analysis** — flag packed/encrypted payloads
+- [ ] **Password‑protected archive** detection (classic malware delivery)
+- [ ] Recursive analysis of archive contents (ZIP / 7z)
+- [ ] **QR‑code extraction & decoding** (quishing) from inline images and PDFs
 - [ ] YARA scanning of attachments (custom rule file)
-- [ ] Recursive analysis of archive contents (ZIP/7z)
-- [ ] Aggregate `index.html` dashboard for batch runs
-- [ ] STIX 2.1 IOC export
-- [ ] Optional QR‑code extraction & decoding (quishing)
+- [ ] **STIX 2.1** IOC export and aggregate batch dashboard
 
 ---
 
