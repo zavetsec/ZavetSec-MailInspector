@@ -75,9 +75,22 @@ Abuse mailboxes fill up with forwarded `.eml`/`.msg` files, and an L1 analyst ha
 | **Sender spoofing** | From ↔ Return‑Path ↔ Reply‑To mismatch · foreign address in display‑name · brand impersonation in display‑name · Message‑ID domain mismatch |
 | **URLs** | link text ≠ href (link spoofing) · IP‑literal URLs · `user:pass@` host obfuscation · punycode / IDN homographs · **mixed‑script (Latin + Cyrillic/Greek) homoglyphs** · URL shorteners · cheap/abused TLDs · brand‑in‑subdomain · `data:` / `javascript:` schemes |
 | **Body** | bilingual (EN + RU) social‑engineering keyword scoring · tracking pixels · hidden text · in‑body HTML forms |
-| **Attachments** | MD5 / SHA‑1 / SHA‑256 · **true file type via magic bytes vs. claimed extension** · dangerous extensions · double extensions · **VBA macro detection** (auto‑exec / suspicious, via `oletools`) · archive flagging |
+| **Attachments** | MD5 / SHA‑1 / SHA‑256 · **true file type via magic bytes vs. claimed extension** · dangerous & double extensions · **VBA macro detection** (auto‑exec / suspicious, via `oletools`) · **context‑aware Shannon entropy** (packed / obfuscated payloads) · **password‑protected archive detection** (ZIP / RAR / 7z) with **body‑password correlation** |
+| **Recursive archives** | **extracts and re‑scans nested content** (ZIP / TAR / GZIP in‑memory; 7z / RAR via optional libs) up to 3 levels deep · **zip‑bomb guards** (depth / file‑count / size budget / compression‑ratio) · every nested file gets the full detector pass and its hash added to the IOC list |
 | **Threat intel** | *optional* SHA‑256 lookup against MalwareBazaar + ThreatFox (`--online`) |
 | **Output** | risk score → verdict · de‑duplicated IOCs (domains / IPs / URLs / e‑mails / hashes) · delivery path |
+
+### Recursive archive analysis
+
+Malware rarely arrives as a bare `.exe` — it hides inside an archive. MailInspector unpacks containers **in memory** and runs every detector again on each nested file, so an executable buried in a zip‑inside‑a‑zip still surfaces, with its full path shown:
+
+<div align="center">
+
+![Recursive archive extraction](assets/report-recursive.png)
+
+</div>
+
+Extraction is bounded by depth, file‑count, per‑file and total‑size budgets, and a compression‑ratio check — a **decompression bomb** is stopped and reported rather than detonated. In‑memory handling also sidesteps path‑traversal (zip‑slip) entirely.
 
 ---
 
@@ -239,12 +252,12 @@ build\build.ps1
 
 - [ ] **ARC** chain validation (`Authentication-Results` survivability across hops)
 - [ ] **S/MIME & PGP** detection — signature presence, validity, and signer/sender mismatch
-- [ ] **Attachment entropy analysis** — flag packed/encrypted payloads
-- [ ] **Password‑protected archive** detection (classic malware delivery)
-- [ ] Recursive analysis of archive contents (ZIP / 7z)
 - [ ] **QR‑code extraction & decoding** (quishing) from inline images and PDFs
 - [ ] YARA scanning of attachments (custom rule file)
 - [ ] **STIX 2.1** IOC export and aggregate batch dashboard
+
+**Shipped in v1.1:** context‑aware attachment entropy · password‑protected archive detection with body‑password correlation.
+**Shipped in v1.2:** recursive archive extraction (ZIP / TAR / GZIP / 7z / RAR) with zip‑bomb guards and full nested re‑scan.
 
 ---
 

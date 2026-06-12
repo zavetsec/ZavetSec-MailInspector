@@ -12,7 +12,7 @@ switch ($Target) {
     Write-Host '[*] Building portable .pyz (zipapp, AV-friendly)...'
     Remove-Item -Recurse -Force build\deps -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force build\deps | Out-Null
-    pip install --target build\deps extract-msg oletools requests -q
+    pip install --target build\deps extract-msg oletools requests py7zr -q
     Copy-Item $Src build\deps\__main__.py -Force
     python -m zipapp build\deps -p 'python' -o "$Name.pyz"
     Write-Host "[+] Done: $Name.pyz"
@@ -20,7 +20,7 @@ switch ($Target) {
   'exe' {
     Write-Host '[*] Building single-file .exe (PyInstaller)...'
     Write-Host '    NOTE: unsigned exe is often flagged by AV/EDR — allowlist by SHA-256.'
-    pip install pyinstaller extract-msg oletools requests -q
+    pip install pyinstaller extract-msg oletools requests py7zr -q
     pyinstaller --onefile --name $Name `
       --hidden-import oletools.olevba --hidden-import extract_msg `
       --collect-submodules oletools --collect-submodules extract_msg `

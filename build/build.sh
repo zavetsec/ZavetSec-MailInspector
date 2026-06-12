@@ -9,7 +9,7 @@ NAME="ZavetSec-MailInspector"
 build_pyz() {
   echo "[*] Building portable .pyz (zipapp, AV-friendly)..."
   rm -rf build/deps && mkdir -p build/deps
-  pip install --target build/deps extract-msg oletools requests -q
+  pip install --target build/deps extract-msg oletools requests py7zr -q
   cp "$SRC" build/deps/__main__.py
   python3 -m zipapp build/deps -p "/usr/bin/env python3" -o "${NAME}.pyz"
   echo "[+] Done: ${NAME}.pyz"
@@ -19,7 +19,7 @@ build_pyz() {
 build_exe() {
   echo "[*] Building single-file .exe (PyInstaller)..."
   echo "    NOTE: unsigned exe is often flagged by AV/EDR — allowlist by SHA-256."
-  pip install pyinstaller extract-msg oletools requests -q
+  pip install pyinstaller extract-msg oletools requests py7zr -q
   pyinstaller --onefile --name "$NAME" \
     --hidden-import oletools.olevba --hidden-import extract_msg \
     --collect-submodules oletools --collect-submodules extract_msg \

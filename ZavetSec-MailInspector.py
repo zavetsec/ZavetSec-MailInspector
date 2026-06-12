@@ -22,13 +22,20 @@ import datetime
 import email
 import email.policy
 import email.utils
+import gzip
 import hashlib
 import html as html_lib
+import io
 import json
+import math
 import os
 import re
+import shutil
 import sys
+import tarfile
+import tempfile
 import unicodedata
+import zipfile
 from collections import defaultdict
 from email.parser import BytesParser
 
@@ -53,7 +60,27 @@ try:
 except Exception:
     HAVE_REQUESTS = False
 
-VERSION = "1.0"
+try:
+    import rarfile  # type: ignore
+    HAVE_RARFILE = True
+except Exception:
+    HAVE_RARFILE = False
+
+try:
+    import py7zr  # type: ignore
+    HAVE_PY7ZR = True
+except Exception:
+    HAVE_PY7ZR = False
+
+VERSION = "1.2"
+
+# Recursive-extraction safety limits (zip-bomb / resource guards)
+MAX_ARCHIVE_DEPTH = 3                       # nesting depth (zip-in-zip-in-zip)
+MAX_NESTED_FILES = 500                       # total files across the whole tree
+MAX_TOTAL_EXTRACT = 256 * 1024 * 1024        # 256 MB cumulative budget
+MAX_FILE_EXTRACT = 64 * 1024 * 1024          # 64 MB per extracted entry
+ZIP_BOMB_RATIO = 100                          # uncompressed/compressed ratio alarm
+ZIP_BOMB_MIN_UNCOMPRESSED = 50 * 1024 * 1024  # only alarm above this size
 
 # --------------------------------------------------------------------------- #
 #  Severity model
@@ -224,6 +251,7 @@ class MailReport:
         self.findings = []
         self.urls = []           # list of dicts: text, href, host
         self.attachments = []    # list of dicts
+        self.body_password_hint = None  # password mentioned in body (archive lure)
         self.iocs = {"domains": set(), "ips": set(), "urls": set(),
                      "emails": set(), "hashes": set()}
         self.score = 0
@@ -527,6 +555,9 @@ def analyze_body(plain, html, rep):
     for em in EMAIL_RE.findall((plain or "") + " " + _strip_tags(html or "")):
         rep.iocs["emails"].add(em.lower())
 
+    # password hint for a protected archive (correlated with attachments later)
+    rep.body_password_hint = detect_body_password(plain, html, rep.subject)
+
 
 # --------------------------------------------------------------------------- #
 #  Header / sender analysis
@@ -661,91 +692,545 @@ def _scan_macros(data, fname):
         return {"has_macros": None, "error": str(e)}
 
 
+# --------------------------------------------------------------------------- #
+#  Entropy (Shannon) — context-aware
+# --------------------------------------------------------------------------- #
+# Family-level expectation: file types whose contents are *inherently* high
+# entropy (already compressed / encrypted / encoded). High entropy here is
+# NORMAL and must not be flagged. The signal of interest is high entropy where
+# it does not belong — packed executables, or "documents" that are really blobs.
+_HIGH_ENTROPY_EXPECTED_MAGIC = {
+    "ZIP / OOXML / JAR / APK", "RAR archive", "7-Zip archive", "GZIP archive",
+    "BZIP2 archive", "Microsoft Cabinet (CAB)", "PDF document",
+}
+_HIGH_ENTROPY_EXPECTED_EXT = {
+    "zip", "rar", "7z", "gz", "tgz", "bz2", "cab", "ace", "xz", "zst",
+    "docx", "xlsx", "pptx", "docm", "xlsm", "pptm", "jar", "apk", "epub",
+    "png", "jpg", "jpeg", "gif", "webp", "mp3", "mp4", "avi", "mkv", "mov",
+    "pdf", "iso", "img", "dmg", "vhd", "vhdx",
+}
+_DOCUMENTISH_EXT = {
+    "txt", "csv", "log", "rtf", "doc", "xls", "ppt", "htm", "html", "xml",
+    "json", "eml", "msg", "ini", "conf", "bat", "cmd", "ps1", "vbs", "js",
+}
+
+
+def shannon_entropy(data, cap=8 * 1024 * 1024):
+    """Bits per byte (0..8). Computed via 256 C-level passes for speed."""
+    if not data:
+        return 0.0
+    sample = data if len(data) <= cap else data[:cap]
+    n = len(sample)
+    ent = 0.0
+    for b in range(256):
+        c = sample.count(b)
+        if c:
+            p = c / n
+            ent -= p * math.log2(p)
+    return ent
+
+
+def entropy_finding(entropy, label, ext, is_exec):
+    """Return (severity, title, detail) or None given context."""
+    if entropy < 7.0:
+        return None
+    expected = (label in _HIGH_ENTROPY_EXPECTED_MAGIC
+                or ext in _HIGH_ENTROPY_EXPECTED_EXT)
+    e = f"{entropy:.2f} bits/byte"
+    # Packed / obfuscated executable
+    if is_exec or label in ("PE/DOS executable (EXE/DLL)", "ELF executable"):
+        if entropy >= 7.2:
+            sev = SEV_HIGH if entropy >= 7.5 else SEV_MED
+            return (sev, "Высокоэнтропийный исполняемый файл (вероятно упакован/обфусцирован)",
+                    f"энтропия {e} — признак packer/crypter (UPX и т.п.)")
+        return None
+    # "Document-ish" type that is actually a high-entropy blob
+    if ext in _DOCUMENTISH_EXT and not expected and entropy >= 7.4:
+        return (SEV_MED, "Высокая энтропия в файле, заявленном как документ/текст",
+                f"энтропия {e} — содержимое похоже на зашифрованные/упакованные данные")
+    # Unknown type, very high entropy, not an expected-compressed format
+    if not expected and entropy >= 7.6:
+        return (SEV_LOW, "Высокая энтропия вложения",
+                f"энтропия {e} — упаковано/зашифровано/закодировано")
+    return None  # expected-compressed types: no alarm
+
+
+# --------------------------------------------------------------------------- #
+#  Password-protected archive detection
+# --------------------------------------------------------------------------- #
+def _zip_protection(data):
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:
+        return None
+    enc, aes, enc_names, entries = False, False, [], []
+    try:
+        for zi in zf.infolist():
+            entries.append(zi.filename)
+            if zi.flag_bits & 0x1:          # general-purpose bit 0 = encrypted
+                enc = True
+                enc_names.append(zi.filename)
+            if zi.compress_type == 99:      # WinZip AES
+                aes = True
+                enc = True
+    except Exception:
+        pass
+    if not entries:
+        return None
+    return {"format": "zip", "encrypted": enc, "aes": aes,
+            "entries": entries[:50], "enc_names": enc_names[:50]}
+
+
+def _rar4_protection(data):
+    """Minimal, bounded RAR4 block walk for password flags. No external deps."""
+    try:
+        if not data.startswith(b"Rar!\x1a\x07\x00"):
+            return None
+        pos, n, names, enc = 7, len(data), [], False
+        for _ in range(2000):  # bounded
+            if pos + 7 > n:
+                break
+            flags = int.from_bytes(data[pos + 3:pos + 5], "little")
+            htype = data[pos + 2]
+            hsize = int.from_bytes(data[pos + 5:pos + 7], "little")
+            if hsize == 0:
+                break
+            add = 0
+            if flags & 0x8000 and pos + 11 <= n:
+                add = int.from_bytes(data[pos + 7:pos + 11], "little")
+            if htype == 0x73 and flags & 0x0080:   # archive header: headers encrypted (-hp)
+                enc = True
+            if htype == 0x74:                       # file header
+                if flags & 0x0004:                  # FILE password flag
+                    enc = True
+                # filename starts after the fixed 32-byte file header (best-effort)
+            pos += hsize + add
+        return {"format": "rar4", "encrypted": enc, "aes": False,
+                "entries": names, "enc_names": []}
+    except Exception:
+        return None
+
+
+def _rar5_protection(data):
+    """RAR5: detect header-encryption (CRYPT header, type 4) right after sig."""
+    try:
+        sig = b"Rar!\x1a\x07\x01\x00"
+        if not data.startswith(sig):
+            return None
+
+        def read_vint(buf, i):
+            val, shift = 0, 0
+            while i < len(buf):
+                b = buf[i]; i += 1
+                val |= (b & 0x7F) << shift
+                if not (b & 0x80):
+                    return val, i
+                shift += 7
+            return val, i
+
+        i = len(sig) + 4               # skip 4-byte header CRC
+        _hsize, i = read_vint(data, i)
+        htype, _ = read_vint(data, i)
+        enc = (htype == 4)             # CRYPT header => encrypted headers
+        return {"format": "rar5", "encrypted": enc, "aes": enc,
+                "entries": [], "enc_names": []}
+    except Exception:
+        return None
+
+
+def _7z_protection(data):
+    """Conservative: presence of AES-256 coder id in the (unencrypted) header."""
+    try:
+        if not data.startswith(b"7z\xbc\xaf\x27\x1c"):
+            return None
+        # 06F10701 = AES-256 + SHA-256 coder method id used by 7-Zip encryption
+        enc = b"\x06\xf1\x07\x01" in data[:65536]
+        return {"format": "7z", "encrypted": enc, "aes": enc,
+                "entries": [], "enc_names": []}
+    except Exception:
+        return None
+
+
+def detect_archive_protection(data, ext, label):
+    """Return protection dict or None. Best-effort, no false positives."""
+    if data.startswith(b"PK\x03\x04") or data.startswith(b"PK\x05\x06"):
+        # OOXML are zips too, but never have the encryption flag set -> safe
+        return _zip_protection(data)
+    if data.startswith(b"Rar!\x1a\x07\x01\x00"):
+        return _rar5_protection(data)
+    if data.startswith(b"Rar!\x1a\x07\x00"):
+        if HAVE_RARFILE:
+            try:
+                rf = rarfile.RarFile(io.BytesIO(data))
+                enc = rf.needs_password() or any(i.needs_password() for i in rf.infolist())
+                return {"format": "rar", "encrypted": bool(enc), "aes": False,
+                        "entries": rf.namelist()[:50], "enc_names": []}
+            except Exception:
+                pass
+        return _rar4_protection(data)
+    if data.startswith(b"7z\xbc\xaf\x27\x1c"):
+        return _7z_protection(data)
+    return None
+
+
+def detect_body_password(plain, html, subject):
+    """Find a password hint in the message body (classic protected-archive lure)."""
+    corpus = " ".join([plain or "", _strip_tags(html or ""), subject or ""])
+    patterns = [
+        r"(?:password|passwd|pwd|pass(?:word)?|pin|code)\s*(?:is|:|=|—|-)\s*([^\s,.;<>\"']{2,40})",
+        r"(?:пароль|код(?:\s+доступа)?|пасс?ворд)\s*(?:это|:|=|—|-)?\s*([^\s,.;<>\"']{2,40})",
+    ]
+    for pat in patterns:
+        m = re.search(pat, corpus, re.I)
+        if m:
+            token = m.group(1).strip()
+            # avoid capturing whole sentences / urls
+            if 2 <= len(token) <= 40 and "http" not in token.lower():
+                return token
+    # mention without explicit token
+    if re.search(r"\b(?:password[- ]?protected|защищ\w+\s+паролем|запаролен)\b",
+                 corpus, re.I):
+        return "(mentioned)"
+    return None
+
+
+def _basename(name):
+    return name.replace("\\", "/").rstrip("/").split("/")[-1] or name
+
+
+# --------------------------------------------------------------------------- #
+#  Safe archive extractors (in-memory => no zip-slip; bounded => no zip-bomb)
+# --------------------------------------------------------------------------- #
+def _looks_like_office_zip(names):
+    return ("[Content_Types].xml" in names
+            or any(n.startswith(("word/", "xl/", "ppt/", "_rels/")) for n in names))
+
+
+def _extract_zip(data, ctx):
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:
+        return None
+    infos = [zi for zi in zf.infolist() if not zi.is_dir()]
+    if _looks_like_office_zip([zi.filename for zi in infos]):
+        return None  # it's an OOXML document, not a container archive
+    meta = {"bomb": False, "truncated": False}
+    total_unc = sum(zi.file_size for zi in infos)
+    total_cmp = sum(zi.compress_size for zi in infos) or 1
+    if total_unc > ZIP_BOMB_MIN_UNCOMPRESSED and (total_unc / total_cmp) > ZIP_BOMB_RATIO:
+        meta["bomb"] = True
+        meta["ratio"] = total_unc / total_cmp
+        return [], meta
+    out = []
+    for zi in infos:
+        if ctx["count"] >= MAX_NESTED_FILES or ctx["bytes"] >= MAX_TOTAL_EXTRACT:
+            meta["truncated"] = True
+            break
+        if zi.flag_bits & 0x1:                 # encrypted entry — cannot read
+            continue
+        if zi.file_size > MAX_FILE_EXTRACT:     # declared size guard
+            meta["truncated"] = True
+            continue
+        try:
+            with zf.open(zi) as fh:
+                chunk = fh.read(MAX_FILE_EXTRACT + 1)   # bounded actual read
+        except Exception:
+            continue
+        if len(chunk) > MAX_FILE_EXTRACT:
+            meta["truncated"] = True
+            continue
+        ctx["count"] += 1
+        ctx["bytes"] += len(chunk)
+        out.append((zi.filename, chunk))
+    return out, meta
+
+
+def _extract_tar(data, ctx):
+    try:
+        tf = tarfile.open(fileobj=io.BytesIO(data))
+    except Exception:
+        return None
+    meta = {"bomb": False, "truncated": False}
+    out = []
+    for m in tf.getmembers():
+        if not m.isfile():
+            continue
+        if ctx["count"] >= MAX_NESTED_FILES or ctx["bytes"] >= MAX_TOTAL_EXTRACT:
+            meta["truncated"] = True
+            break
+        if m.size > MAX_FILE_EXTRACT:
+            meta["truncated"] = True
+            continue
+        try:
+            fo = tf.extractfile(m)
+            chunk = fo.read(MAX_FILE_EXTRACT + 1) if fo else b""
+        except Exception:
+            continue
+        if len(chunk) > MAX_FILE_EXTRACT:
+            meta["truncated"] = True
+            continue
+        ctx["count"] += 1
+        ctx["bytes"] += len(chunk)
+        out.append((m.name, chunk))
+    return out, meta
+
+
+def _extract_gzip(data, ctx, fname):
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as gf:
+            chunk = gf.read(MAX_FILE_EXTRACT + 1)
+    except Exception:
+        return None
+    if len(chunk) > MAX_FILE_EXTRACT:
+        return [], {"bomb": True, "truncated": True}
+    inner = fname[:-3] if fname.lower().endswith(".gz") else fname + ".out"
+    if fname.lower().endswith(".tgz"):
+        inner = fname[:-4] + ".tar"
+    ctx["count"] += 1
+    ctx["bytes"] += len(chunk)
+    return [(_basename(inner), chunk)], {"bomb": False, "truncated": False}
+
+
+def _extract_7z(data, ctx):
+    if not HAVE_PY7ZR:
+        return None
+    try:
+        z = py7zr.SevenZipFile(io.BytesIO(data))
+        if z.needs_password():
+            return None
+        meta = {"bomb": False, "truncated": False}
+        # bomb pre-check from the listing (no extraction yet)
+        infos = z.list()
+        total_unc = sum((fi.uncompressed or 0) for fi in infos if fi.is_file)
+        if total_unc > ZIP_BOMB_MIN_UNCOMPRESSED:
+            ratio = total_unc / (len(data) or 1)
+            if ratio > ZIP_BOMB_RATIO:
+                meta["bomb"] = True
+                meta["ratio"] = ratio
+                return [], meta
+        z.reset()
+        tmp = tempfile.mkdtemp(prefix="zsmi7z_")
+        try:
+            z.extractall(path=tmp)          # py7zr sanitizes member paths
+            out = []
+            for root, _dirs, files in os.walk(tmp):
+                for fn in files:
+                    fp = os.path.join(root, fn)
+                    if ctx["count"] >= MAX_NESTED_FILES or ctx["bytes"] >= MAX_TOTAL_EXTRACT:
+                        meta["truncated"] = True
+                        break
+                    try:
+                        if os.path.getsize(fp) > MAX_FILE_EXTRACT:
+                            meta["truncated"] = True
+                            continue
+                        with open(fp, "rb") as fh:
+                            chunk = fh.read(MAX_FILE_EXTRACT + 1)
+                    except Exception:
+                        continue
+                    rel = os.path.relpath(fp, tmp)
+                    ctx["count"] += 1
+                    ctx["bytes"] += len(chunk)
+                    out.append((rel, chunk))
+            return out, meta
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    except Exception:
+        return None
+
+
+def _extract_rar(data, ctx):
+    if not HAVE_RARFILE:
+        return None
+    try:
+        rf = rarfile.RarFile(io.BytesIO(data))
+        if rf.needs_password():
+            return None
+        meta = {"bomb": False, "truncated": False}
+        out = []
+        for ri in rf.infolist():
+            if ri.isdir():
+                continue
+            if ctx["count"] >= MAX_NESTED_FILES or ctx["bytes"] >= MAX_TOTAL_EXTRACT:
+                meta["truncated"] = True
+                break
+            if ri.file_size > MAX_FILE_EXTRACT:
+                meta["truncated"] = True
+                continue
+            try:
+                chunk = rf.read(ri)
+            except Exception:
+                continue
+            ctx["count"] += 1
+            ctx["bytes"] += len(chunk)
+            out.append((ri.filename, chunk))
+        return out, meta
+    except Exception:
+        return None
+
+
+def _get_archive_entries(data, ext, label, ctx, fname):
+    """Dispatch to the right extractor. Returns (entries, meta) or None."""
+    if data[:4] in (b"PK\x03\x04", b"PK\x05\x06"):
+        return _extract_zip(data, ctx)
+    if data[:6] == b"7z\xbc\xaf\x27\x1c":
+        return _extract_7z(data, ctx)
+    if data[:7] == b"Rar!\x1a\x07\x00" or data[:8] == b"Rar!\x1a\x07\x01\x00":
+        return _extract_rar(data, ctx)
+    if data[:2] == b"\x1f\x8b":                 # gzip
+        return _extract_gzip(data, ctx, fname)
+    # tar (incl. uncompressed) — detected by extension or tarfile probe
+    if ext in ("tar",) or fname.lower().endswith((".tar",)):
+        return _extract_tar(data, ctx)
+    return None
+
+
+# --------------------------------------------------------------------------- #
+#  Per-file scanner (shared by top-level attachments and nested archive members)
+# --------------------------------------------------------------------------- #
+def _scan_unit(data, disp_path, fname, rep, save_dir, depth, ctx):
+    if not data:
+        return
+    ext = fname.lower().rsplit(".", 1)[-1] if "." in fname else ""
+    info = {
+        "name": fname,
+        "path": disp_path,
+        "depth": depth,
+        "ext": ext,
+        "size": len(data),
+        "md5": hashlib.md5(data).hexdigest(),
+        "sha1": hashlib.sha1(data).hexdigest(),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "magic": "",
+        "ext_mismatch": False,
+        "entropy": 0.0,
+        "protection": None,
+        "macros": None,
+        "ti": None,
+    }
+    rep.iocs["hashes"].add(info["sha256"])
+    label, is_exec = _detect_magic(data)
+    info["magic"] = label or "unknown"
+    info["entropy"] = round(shannon_entropy(data), 2)
+    rep.attachments.append(info)   # append now so container precedes its children
+    disp = disp_path
+    nested = depth > 0
+
+    # dangerous extension
+    if ext in DANGEROUS_EXT:
+        sev = SEV_HIGH if ext in {"exe", "scr", "com", "pif", "js", "vbs",
+                                  "hta", "jar", "lnk", "iso", "img", "wsf",
+                                  "bat", "cmd", "ps1", "msi", "cpl"} else SEV_MED
+        title = ("Опасный файл внутри архива" if nested else f"Опасное вложение .{ext}")
+        rep.add("ATTACH", sev, title, f"{disp}")
+
+    # double extension
+    parts = fname.lower().split(".")
+    if len(parts) >= 3 and parts[-1] in DANGEROUS_EXT and parts[-2] in {
+        "pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png", "txt",
+        "zip", "rtf", "html", "htm", "csv"
+    }:
+        rep.add("ATTACH", SEV_HIGH, "Двойное расширение файла",
+                f"{disp}  (маскируется под .{parts[-2]})")
+
+    # extension vs magic mismatch
+    if label and label in EXT_FOR_MAGIC:
+        allowed = EXT_FOR_MAGIC[label]
+        if ext and ext not in allowed:
+            info["ext_mismatch"] = True
+            sev = SEV_HIGH if is_exec else SEV_MED
+            rep.add("ATTACH", sev, "Тип файла не соответствует расширению",
+                    f"{disp}: расширение .{ext}, реально → {label}")
+    if label and is_exec and ext not in {"exe", "dll", "scr", "com", "elf",
+                                          "so", "lnk", "cpl", "ocx", "sys"}:
+        rep.add("ATTACH", SEV_CRIT, "Исполняемый файл под видом документа",
+                f"{disp}: содержимое = {label}")
+
+    # archive: protection -> (encrypted findings) ; else recurse ; else generic note
+    prot = detect_archive_protection(data, ext, label)
+    if prot is not None:
+        info["protection"] = prot
+    recursable = False
+    if prot is not None and prot.get("encrypted"):
+        hint = rep.body_password_hint
+        if hint:
+            shown = "" if hint == "(mentioned)" else f" (пароль в письме: «{hint}»)"
+            rep.add("ATTACH", SEV_HIGH,
+                    "Зашифрованный архив + пароль в теле письма (классический malspam)",
+                    f"{disp} [{prot['format']}] — приём обхода AV/песочницы{shown}")
+        else:
+            rep.add("ATTACH", SEV_MED, f"Архив защищён паролем ({prot['format']})",
+                    f"{disp} — содержимое нельзя проверить статически; "
+                    f"частый способ доставки вредоносного ПО")
+    else:
+        # try to recurse into the container
+        if depth < MAX_ARCHIVE_DEPTH:
+            res = _get_archive_entries(data, ext, label, ctx, fname)
+            if res is not None:
+                recursable = True
+                entries, meta = res
+                if meta.get("bomb"):
+                    ratio = meta.get("ratio")
+                    rep.add("ATTACH", SEV_HIGH, "Подозрение на decompression bomb",
+                            f"{disp} — коэффициент сжатия "
+                            f"{('%.0f' % ratio + 'x' ) if ratio else 'аномальный'}; "
+                            f"распаковка остановлена")
+                else:
+                    n = len(entries)
+                    if depth == 0 and n:
+                        rep.add("ATTACH", SEV_INFO, f"Архив распакован: {n} файл(ов)",
+                                f"{disp} — вложенное содержимое проанализировано")
+                    if meta.get("truncated"):
+                        rep.add("ATTACH", SEV_INFO, "Достигнут лимит распаковки",
+                                f"{disp} — часть содержимого не извлечена (защита от бомб)")
+                    for ename, edata in entries:
+                        _scan_unit(edata, f"{disp} → {ename}", _basename(ename),
+                                   rep, save_dir, depth + 1, ctx)
+        if not recursable and ext in ARCHIVE_EXT:
+            note = f"Архив-вложение ({prot['format']})" if prot else f"Архив-вложение (.{ext})"
+            rep.add("ATTACH", SEV_LOW, note,
+                    f"{disp} — содержимое требует ручной/песочничной проверки")
+
+    # entropy (context-aware) — skip for containers we just recursed into
+    if not recursable:
+        ef = entropy_finding(info["entropy"], label, ext, is_exec)
+        if ef:
+            rep.add("ATTACH", ef[0], ef[1], f"{disp}: {ef[2]}")
+
+    # macros
+    if ext in MACRO_EXT or label in ("OLE2 (legacy Office / MSI / MSG)",
+                                     "ZIP / OOXML / JAR / APK"):
+        mac = _scan_macros(data, fname)
+        info["macros"] = mac
+        if mac and mac.get("has_macros"):
+            detail = ""
+            if mac.get("autoexec"):
+                detail += "auto-exec: " + ", ".join(mac["autoexec"][:6])
+            sev = SEV_HIGH if mac.get("autoexec") else SEV_MED
+            if mac.get("suspicious"):
+                sev = SEV_HIGH
+                detail += ("; " if detail else "") + \
+                          " | ".join(s.split(":")[0] for s in mac["suspicious"][:6])
+            rep.add("ATTACH", sev, f"Office-файл содержит VBA-макросы: {disp}",
+                    detail or "обнаружены макросы")
+
+    if save_dir:
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            safe = re.sub(r"[^\w.\-]", "_", fname)[:120] or "att.bin"
+            out = os.path.join(save_dir, f"{info['sha256'][:12]}_{safe}")
+            with open(out, "wb") as fh:
+                fh.write(data)
+            info["saved"] = out
+        except Exception:
+            pass
+
+
 def analyze_attachments(msg, rep, save_dir=None):
+    ctx = {"count": 0, "bytes": 0}   # shared budget across the whole archive tree
     for fname, data in _iter_attachments(msg, rep):
         if not data:
             continue
-        ext = fname.lower().rsplit(".", 1)[-1] if "." in fname else ""
-        info = {
-            "name": fname,
-            "ext": ext,
-            "size": len(data),
-            "md5": hashlib.md5(data).hexdigest(),
-            "sha1": hashlib.sha1(data).hexdigest(),
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "magic": "",
-            "ext_mismatch": False,
-            "macros": None,
-            "ti": None,
-        }
-        rep.iocs["hashes"].add(info["sha256"])
-
-        label, is_exec = _detect_magic(data)
-        info["magic"] = label or "unknown"
-
-        # dangerous extension
-        if ext in DANGEROUS_EXT:
-            sev = SEV_HIGH if ext in {"exe", "scr", "com", "pif", "js", "vbs",
-                                      "hta", "jar", "lnk", "iso", "img", "wsf",
-                                      "bat", "cmd", "ps1", "msi", "cpl"} else SEV_MED
-            rep.add("ATTACH", sev, f"Опасное вложение .{ext}", f"{fname}")
-
-        # double extension
-        parts = fname.lower().split(".")
-        if len(parts) >= 3 and parts[-1] in DANGEROUS_EXT and parts[-2] in {
-            "pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png", "txt",
-            "zip", "rtf", "html", "htm", "csv"
-        }:
-            rep.add("ATTACH", SEV_HIGH, "Двойное расширение файла",
-                    f"{fname}  (маскируется под .{parts[-2]})")
-
-        # extension vs magic mismatch
-        if label and label in EXT_FOR_MAGIC:
-            allowed = EXT_FOR_MAGIC[label]
-            if ext and ext not in allowed:
-                info["ext_mismatch"] = True
-                sev = SEV_HIGH if is_exec else SEV_MED
-                rep.add("ATTACH", sev, "Тип файла не соответствует расширению",
-                        f"{fname}: расширение .{ext}, реально → {label}")
-        if label and is_exec and ext not in {"exe", "dll", "scr", "com", "elf",
-                                             "so", "lnk", "cpl", "ocx", "sys"}:
-            rep.add("ATTACH", SEV_CRIT, "Исполняемый файл под видом документа",
-                    f"{fname}: содержимое = {label}")
-
-        # archive notice
-        if ext in ARCHIVE_EXT:
-            rep.add("ATTACH", SEV_LOW, f"Архив-вложение (.{ext})",
-                    f"{fname} — содержимое требует ручной/песочничной проверки")
-
-        # macro analysis
-        if ext in MACRO_EXT or label in ("OLE2 (legacy Office / MSI / MSG)",
-                                         "ZIP / OOXML / JAR / APK"):
-            mac = _scan_macros(data, fname)
-            info["macros"] = mac
-            if mac and mac.get("has_macros"):
-                detail = ""
-                if mac.get("autoexec"):
-                    detail += "auto-exec: " + ", ".join(mac["autoexec"][:6])
-                sev = SEV_HIGH if mac.get("autoexec") else SEV_MED
-                if mac.get("suspicious"):
-                    sev = SEV_HIGH
-                    detail += ("; " if detail else "") + \
-                              " | ".join(s.split(":")[0] for s in mac["suspicious"][:6])
-                rep.add("ATTACH", sev, f"Office-вложение содержит VBA-макросы: {fname}",
-                        detail or "обнаружены макросы")
-
-        if save_dir:
-            try:
-                os.makedirs(save_dir, exist_ok=True)
-                safe = re.sub(r"[^\w.\-]", "_", fname)[:120] or "att.bin"
-                out = os.path.join(save_dir, f"{info['sha256'][:12]}_{safe}")
-                with open(out, "wb") as fh:
-                    fh.write(data)
-                info["saved"] = out
-            except Exception:
-                pass
-
-        rep.attachments.append(info)
+        _scan_unit(data, fname, fname, rep, save_dir, 0, ctx)
 
 
 # --------------------------------------------------------------------------- #
@@ -1015,20 +1500,36 @@ def build_html(rep):
     if rep.attachments:
         rows = ""
         for a in rep.attachments:
-            mac = ""
+            flags = []
             if a.get("macros") and a["macros"].get("has_macros"):
-                mac = "VBA"
+                m = "VBA"
                 if a["macros"].get("autoexec"):
-                    mac += "+auto"
+                    m += "+auto"
+                flags.append(m)
+            prot = a.get("protection")
+            if prot and prot.get("encrypted"):
+                flags.append(f"🔒{prot['format']}")
+            flag_cell = "⚠ " + " ".join(flags) if flags else "—"
+            ent = a.get("entropy", 0.0)
+            ent_cell = (f"<span style='color:var(--high)'>{ent:.2f}</span>"
+                        if ent >= 7.2 else f"{ent:.2f}")
             ti = a.get("ti") or ""
-            rows += (f"<tr><td><code>{e(a['name'])}</code></td>"
+            depth = a.get("depth", 0)
+            if depth > 0:
+                indent = "&nbsp;&nbsp;" * depth
+                name_cell = (f"{indent}<span class='muted'>↳</span> "
+                             f"<code>{e(a['name'])}</code>")
+            else:
+                name_cell = f"<code>{e(a['name'])}</code>"
+            rows += (f"<tr><td>{name_cell}</td>"
                      f"<td>{a['size']:,}</td>"
                      f"<td>{e(a['magic'])}</td>"
-                     f"<td>{'⚠ '+mac if mac else '—'}</td>"
+                     f"<td>{ent_cell}</td>"
+                     f"<td>{flag_cell}</td>"
                      f"<td class='hash'><code class='hash'>{e(a['sha256'])}</code>"
                      f"{'<br><span class=muted>'+e(ti)+'</span>' if ti else ''}</td></tr>")
         parts.append(f"""<section><h2><span class="num">04</span> Вложения ({len(rep.attachments)})</h2>
-<table><thead><tr><th>Имя</th><th>Байт</th><th>Реальный тип</th><th>Макросы</th><th>SHA-256 / TI</th></tr></thead>
+<table><thead><tr><th>Имя</th><th>Байт</th><th>Реальный тип</th><th>Энтропия</th><th>Флаги</th><th>SHA-256 / TI</th></tr></thead>
 <tbody>{rows}</tbody></table></section>""")
 
     # IOCs
