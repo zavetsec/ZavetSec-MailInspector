@@ -36,7 +36,7 @@
   <text x="56" y="160" font-family="'Rajdhani','Segoe UI',Arial,sans-serif" font-size="92" fill="#eef3f7" font-weight="700" letter-spacing="1">Mail<tspan fill="#00ff88">Inspector</tspan></text>
 
   <!-- subtitle -->
-  <text x="60" y="210" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="22" fill="#9fb3c8">Phishing &amp; malware triage for .eml / .msg e-mail files</text>
+  <text x="60" y="210" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="22" fill="#9fb3c8">Триаж фишинга и вредоносного ПО в письмах .eml / .msg</text>
 
   <line x1="60" y1="240" x2="900" y2="240" stroke="url(#rule)" stroke-width="2"/>
 

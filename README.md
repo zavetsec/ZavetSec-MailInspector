@@ -4,8 +4,8 @@
 
 # ZavetSec‑MailInspector
 
-**Phishing & malware triage for `.eml` and `.msg` e‑mail files.**
-A single‑file, dependency‑light DFIR tool that turns a suspicious message into an actionable verdict, a clean IOC list, and a self‑contained HTML report.
+**Триаж фишинга и вредоносного ПО в письмах `.eml` и `.msg`.**
+Однофайловый DFIR‑инструмент с минимумом зависимостей: превращает подозрительное письмо в готовый вердикт, чистый список IOC и самодостаточный HTML‑отчёт.
 
 ![Python](https://img.shields.io/badge/python-3.8%2B-00ff88?style=flat-square&logo=python&logoColor=0a0d10&labelColor=0d1117)
 ![License](https://img.shields.io/badge/license-MIT-00ff88?style=flat-square&labelColor=0d1117)
@@ -17,31 +17,31 @@ A single‑file, dependency‑light DFIR tool that turns a suspicious message in
 
 ---
 
-## Why
+## Зачем
 
-Abuse mailboxes fill up with forwarded `.eml`/`.msg` files, and an L1 analyst has to decide *fast* whether each one is harmless, suspicious, or an active attack. MailInspector automates that first pass and hands back a verdict you can act on — plus a ready‑to‑block IOC list.
+Abuse‑ящики наполняются пересланными `.eml`/`.msg`, и L1‑аналитику нужно *быстро* решить, безобидно письмо, подозрительно или это активная атака. MailInspector автоматизирует первый проход и выдаёт вердикт, по которому можно действовать, плюс готовый к блокировке список IOC.
 
-- **Two formats, one tool** — RFC822 `.eml` *and* Outlook `.msg`.
-- **Runs anywhere** — `.eml` analysis needs **only the Python standard library**.
-- **Offline by default** — nothing leaves the machine unless you pass `--online`.
-- **Air‑gap‑safe reports** — the HTML report references **zero external resources** (no CDNs, no remote fonts, no tracking), so it won't beacon when you view content derived from an attacker's e‑mail.
-- **Automation‑friendly** — JSON output and meaningful exit codes for pipelines and auto‑triage.
+- **Два формата, один инструмент** — RFC822 `.eml` *и* Outlook `.msg`.
+- **Работает везде** — анализ `.eml` требует **только стандартной библиотеки Python**.
+- **Offline по умолчанию** — без флага `--online` ничего не покидает машину.
+- **Отчёт безопасен для air‑gap** — HTML‑отчёт ссылается на **ноль внешних ресурсов** (никаких CDN, удалённых шрифтов, трекинга), поэтому не «звонит домой» при просмотре содержимого, полученного из письма злоумышленника.
+- **Дружелюбен к автоматизации** — вывод в JSON и осмысленные коды возврата для пайплайнов и авто‑триажа.
 
 ---
 
-## Report preview
+## Превью отчёта
 
 <div align="center">
 
-![MailInspector HTML report](assets/report-preview.png)
+![HTML-отчёт MailInspector](assets/report-preview.png)
 
-*Self‑contained HTML report — verdict, scored findings, IOC block and delivery path. Renders fully offline.*
+*Самодостаточный HTML‑отчёт — вердикт, взвешенные индикаторы, блок IOC и маршрут доставки. Рендерится полностью офлайн.*
 
 </div>
 
 ---
 
-## How it works
+## Как это работает
 
 ```text
         ┌─────────────┐
@@ -49,89 +49,91 @@ Abuse mailboxes fill up with forwarded `.eml`/`.msg` files, and an L1 analyst ha
         └──────┬──────┘
                ▼
          ┌──────────┐     stdlib email  ·  extract-msg
-         │  Parser  │     headers · bodies · attachments
+         │  Parser  │     заголовки · тело · вложения
          └────┬─────┘
               ▼
    ┌──────────────────────┐   AUTH · HEADER · URL
    │      Detectors       │   BODY · ATTACH · (TI)
    └──────────┬───────────┘
               ▼
-        ┌───────────┐    weighted severities
+        ┌───────────┐    взвешенные severity
         │  Scoring  │    → CLEAN / SUSPICIOUS / MALICIOUS
         └─────┬─────┘
               ▼
    ┌────────────────────────────────┐
-   │  HTML report · JSON · IOC list │  + exit code
+   │  HTML-отчёт · JSON · список IOC │  + код возврата
    └────────────────────────────────┘
 ```
 
 ---
 
-## Detection coverage
+## Что детектируется
 
-| Layer | Checks |
-|-------|--------|
-| **Authentication** | SPF / DKIM / DMARC results · `Received` chain & originating IP |
-| **Sender spoofing** | From ↔ Return‑Path ↔ Reply‑To mismatch · foreign address in display‑name · brand impersonation in display‑name · Message‑ID domain mismatch |
-| **URLs** | link text ≠ href (link spoofing) · IP‑literal URLs · `user:pass@` host obfuscation · punycode / IDN homographs · **mixed‑script (Latin + Cyrillic/Greek) homoglyphs** · URL shorteners · cheap/abused TLDs · brand‑in‑subdomain · `data:` / `javascript:` schemes |
-| **Body** | bilingual (EN + RU) social‑engineering keyword scoring · tracking pixels · hidden text · in‑body HTML forms |
-| **Attachments** | MD5 / SHA‑1 / SHA‑256 · **true file type via magic bytes vs. claimed extension** · dangerous & double extensions · **VBA macro detection** (auto‑exec / suspicious, via `oletools`) · **context‑aware Shannon entropy** (packed / obfuscated payloads) · **password‑protected archive detection** (ZIP / RAR / 7z) with **body‑password correlation** |
-| **Recursive archives** | **extracts and re‑scans nested content** (ZIP / TAR / GZIP in‑memory; 7z / RAR via optional libs) up to 3 levels deep · **zip‑bomb guards** (depth / file‑count / size budget / compression‑ratio) · every nested file gets the full detector pass and its hash added to the IOC list |
-| **Threat intel** | *optional* SHA‑256 lookup against MalwareBazaar + ThreatFox (`--online`) |
-| **Output** | risk score → verdict · de‑duplicated IOCs (domains / IPs / URLs / e‑mails / hashes) · delivery path |
+| Слой | Проверки |
+|------|----------|
+| **Аутентификация** | результаты SPF / DKIM / DMARC · цепочка `Received` и originating IP |
+| **Спуфинг отправителя** | несовпадение From ↔ Return‑Path ↔ Reply‑To · чужой адрес в display‑name · имитация бренда в display‑name · несовпадение домена Message‑ID |
+| **URL** | текст ссылки ≠ href (link spoofing) · ссылка на IP‑адрес · обфускация хоста через `user:pass@` · punycode / IDN homograph · **смешение алфавитов (Latin + Cyrillic/Greek) — homoglyph** · сокращатели ссылок · дешёвые/абузные TLD · бренд в поддомене · схемы `data:` / `javascript:` |
+| **Тело** | двуязычный (RU + EN) скоринг ключевых слов социальной инженерии · tracking‑пиксели · скрытый текст · HTML‑формы прямо в письме |
+| **Вложения** | MD5 / SHA‑1 / SHA‑256 · **реальный тип по magic bytes vs. заявленное расширение** · опасные и двойные расширения · **детект VBA‑макросов** (auto‑exec / suspicious, через `oletools`) · **контекстная энтропия Shannon** (packed / obfuscated пейлоады) · **детект защищённых паролем архивов** (ZIP / RAR / 7z) с **корреляцией пароля из тела письма** |
+| **Рекурсивные архивы** | **распаковывает и повторно сканирует вложенное содержимое** (ZIP / TAR / GZIP в памяти; 7z / RAR через опциональные библиотеки) на глубину до 3 уровней · **защита от zip‑bomb** (глубина / число файлов / бюджет размера / compression‑ratio) · каждый вложенный файл проходит полный набор детекторов, а его хэш попадает в список IOC |
+| **Threat intel** | *опционально* проверка SHA‑256 по MalwareBazaar + ThreatFox (`--online`) |
+| **Вывод** | риск‑скор → вердикт · дедуплицированные IOC (домены / IP / URL / e‑mail / хэши) · маршрут доставки |
 
-### Recursive archive analysis
+### Рекурсивный анализ архивов
 
-Malware rarely arrives as a bare `.exe` — it hides inside an archive. MailInspector unpacks containers **in memory** and runs every detector again on each nested file, so an executable buried in a zip‑inside‑a‑zip still surfaces, with its full path shown:
+Вредонос редко приходит «голым» `.exe` — он прячется внутри архива. MailInspector распаковывает контейнеры **в памяти** и прогоняет каждый детектор заново по каждому вложенному файлу, поэтому исполняемый файл, спрятанный в zip‑внутри‑zip, всё равно всплывает — с показом полного пути:
 
 <div align="center">
 
-![Recursive archive extraction](assets/report-recursive.png)
+![Рекурсивная распаковка архивов](assets/report-recursive.png)
 
 </div>
 
-Extraction is bounded by depth, file‑count, per‑file and total‑size budgets, and a compression‑ratio check — a **decompression bomb** is stopped and reported rather than detonated. In‑memory handling also sidesteps path‑traversal (zip‑slip) entirely.
+Распаковка ограничена по глубине, числу файлов, размеру на файл и суммарному бюджету, плюс проверка compression‑ratio — **decompression bomb** останавливается и фиксируется, а не «детонирует». Обработка в памяти заодно полностью снимает path‑traversal (zip‑slip).
 
 ---
 
-## Install
+## Установка
 
 ```bash
 git clone https://github.com/zavetsec/ZavetSec-MailInspector.git
 cd ZavetSec-MailInspector
 
-# Core .eml analysis works with zero dependencies.
-# For .msg parsing, macro detection and online TI:
+# Анализ .eml работает с нулём зависимостей.
+# Для разбора .msg, детекта макросов и онлайн-TI:
 pip install -r requirements.txt
 ```
 
-| Dependency | Enables | Required? |
-|------------|---------|-----------|
-| `extract-msg` | Outlook `.msg` parsing | optional |
-| `oletools` | VBA macro analysis in Office attachments | optional |
-| `requests` | online threat‑intel (`--online`) | optional |
+| Зависимость | Что включает | Обязательна? |
+|-------------|--------------|--------------|
+| `extract-msg` | разбор Outlook `.msg` | опционально |
+| `oletools` | анализ VBA‑макросов в Office‑вложениях | опционально |
+| `requests` | онлайн threat‑intel (`--online`) | опционально |
+| `py7zr` | рекурсия в 7‑Zip архивы | опционально |
+| `rarfile` | рекурсия в RAR (и улучшенный детект шифрования RAR) | опционально |
 
-Missing a dependency degrades gracefully — the tool tells you what it skipped instead of crashing.
+Отсутствие зависимости деградирует мягко — инструмент сообщает, что пропустил, и не падает.
 
 ---
 
-## Quick start
+## Быстрый старт
 
 ```bash
-# Single message → HTML + JSON
+# Одно письмо → HTML + JSON
 python ZavetSec-MailInspector.py suspicious.eml -o report.html -j result.json
 
-# Recurse a whole quarantine / abuse folder
+# Рекурсивный обход всей папки карантина / abuse
 python ZavetSec-MailInspector.py ./abuse-inbox/ -o ./reports/
 
-# Outlook message, extract attachments for sandboxing
+# Письмо Outlook, извлечь вложения для песочницы
 python ZavetSec-MailInspector.py message.msg --dump ./attachments/
 
-# Enable online hash reputation (sends attachment HASHES to MB/ThreatFox)
+# Включить онлайн-репутацию по хэшам (отправляет ХЭШИ вложений в MB/ThreatFox)
 python ZavetSec-MailInspector.py invoice.eml --online -o report.html
 ```
 
-Try it on the included sample:
+Попробовать на включённом в репозиторий примере:
 
 ```bash
 python ZavetSec-MailInspector.py examples/sample_phish.eml -o demo.html
@@ -139,11 +141,11 @@ python ZavetSec-MailInspector.py examples/sample_phish.eml -o demo.html
 
 ---
 
-## Example output
+## Пример вывода
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────
-│ ZavetSec-MailInspector  v1.0
+│ ZavetSec-MailInspector  v1.2
 │ sample_phish.eml  [EML]
 └──────────────────────────────────────────────────────────────────────
   From      : Account Security <support@paypal.com>  <noreply@payments-secure-update.xyz>
@@ -153,62 +155,62 @@ python ZavetSec-MailInspector.py examples/sample_phish.eml -o demo.html
 
   VERDICT: MALICIOUS  (score 100/100)
 
-  [HIGH]    HEADER: Display-name contains a foreign e-mail
-  [HIGH]    URL:    Link text does not match the real address (link spoofing)
-  [HIGH]    URL:    Link points to a raw IP address
-  [HIGH]    ATTACH: Double file extension  (Invoice_2026.pdf.exe)
-  [MEDIUM]  HEADER: Sender name impersonates brand "paypal"
-  [MEDIUM]  URL:    URL shortener (real target hidden)
-  [MEDIUM]  BODY:   Social-engineering triggers (5)
+  [HIGH]    HEADER: Display-name содержит чужой e-mail
+  [HIGH]    URL:    Текст ссылки не совпадает с реальным адресом (link spoofing)
+  [HIGH]    URL:    Ссылка ведёт на IP-адрес, а не на домен
+  [HIGH]    ATTACH: Двойное расширение файла  (Invoice_2026.pdf.exe)
+  [MEDIUM]  HEADER: Имя отправителя имитирует бренд «paypal»
+  [MEDIUM]  URL:    Сокращатель ссылок (реальная цель скрыта)
+  [MEDIUM]  BODY:   Триггеры социальной инженерии (5)
   ...
 ```
 
-The HTML report renders all findings, the full URL and attachment tables, the delivery path, and a copy‑paste IOC block — styled in the ZavetSec dark/terminal aesthetic and fully self‑contained (see [report preview](#report-preview) above).
+HTML‑отчёт рендерит все индикаторы, полные таблицы URL и вложений, маршрут доставки и блок IOC для копирования — в тёмной/терминальной эстетике ZavetSec и полностью самодостаточно (см. [превью отчёта](#превью-отчёта) выше).
 
 ---
 
-## CLI reference
+## Справочник CLI
 
-| Option | Description |
-|--------|-------------|
-| `target` | `.eml` / `.msg` file, or a directory to walk recursively |
-| `-o, --html PATH` | write the HTML report (for a directory target, a reports folder) |
-| `-j, --json PATH` | write machine‑readable JSON |
-| `--dump DIR` | extract attachments to `DIR` (named `sha256_filename`) |
-| `--online` | enable MalwareBazaar + ThreatFox hash lookups (**sends hashes externally**) |
-| `--no-color` | disable ANSI colour in console output |
-| `--quiet` | suppress per‑finding console output |
+| Опция | Описание |
+|-------|----------|
+| `target` | файл `.eml` / `.msg` или каталог для рекурсивного обхода |
+| `-o, --html PATH` | записать HTML‑отчёт (для каталога — папка отчётов) |
+| `-j, --json PATH` | записать машиночитаемый JSON |
+| `--dump DIR` | извлечь вложения в `DIR` (имена вида `sha256_имя`) |
+| `--online` | включить проверку по MalwareBazaar + ThreatFox (**отправляет хэши вовне**) |
+| `--no-color` | отключить ANSI‑цвет в консоли |
+| `--quiet` | подавить вывод по каждому индикатору |
 
-### Exit codes
+### Коды возврата
 
-| Code | Meaning | Use |
-|------|---------|-----|
-| `0` | clean | nothing to do |
-| `1` | suspicious / likely malicious | route to analyst |
-| `2` | malicious | escalate / auto‑quarantine |
+| Код | Значение | Применение |
+|-----|----------|------------|
+| `0` | clean | делать нечего |
+| `1` | suspicious / likely malicious | направить аналитику |
+| `2` | malicious | эскалация / авто‑карантин |
 
-For a directory the exit code reflects the **worst** message in the batch — drop it straight into a mail‑gateway hook or cron‑driven abuse‑mailbox triage.
+Для каталога код возврата отражает **худшее** письмо в пакете — можно повесить прямо на hook почтового шлюза или cron‑триаж abuse‑ящика.
 
 ---
 
-## How scoring works
+## Как работает скоринг
 
-Every finding carries a severity (`INFO` → `CRITICAL`) with a weight. Weights are summed with diminishing returns per category (so ten low‑value URLs can't inflate a verdict on their own) and capped at 100:
+Каждый индикатор несёт severity (`INFO` → `CRITICAL`) с весом. Веса суммируются с убывающей отдачей внутри категории (чтобы десяток малозначимых URL сам по себе не накручивал вердикт) и ограничены сверху 100:
 
-| Score | Verdict |
-|-------|---------|
+| Скор | Вердикт |
+|------|---------|
 | `0 – 17` | **CLEAN** |
 | `18 – 39` | **SUSPICIOUS** |
 | `40 – 69` | **LIKELY MALICIOUS** |
 | `70 – 100` | **MALICIOUS** |
 
-Thresholds and keyword/brand/TLD lists live at the top of the script — tune them to your environment without touching the logic.
+Пороги и списки ключевых слов / брендов / TLD лежат в начале скрипта — подстраивайте под своё окружение, не трогая логику.
 
 ---
 
-## Integrating into a SOC workflow
+## Интеграция в SOC‑workflow
 
-**Auto‑triage an abuse mailbox** (save reports, JSON for your SIEM, exit code for routing):
+**Авто‑триаж abuse‑ящика** (сохранить отчёты, JSON для SIEM, код возврата для маршрутизации):
 
 ```bash
 for f in /var/spool/abuse/*.eml; do
@@ -220,62 +222,62 @@ for f in /var/spool/abuse/*.eml; do
 done
 ```
 
-The JSON carries every finding, all IOCs, attachment hashes and the delivery path — ingest it for correlation, hash‑blocking, or feeding a watchlist.
+JSON несёт каждый индикатор, все IOC, хэши вложений и маршрут доставки — заливайте в корреляцию, hash‑блокировку или watchlist.
 
 ---
 
-## Design & OPSEC notes
+## Дизайн и OPSEC
 
-- **No external references in the report.** URLs from the e‑mail are rendered as inert text, never as live `<a href>`/`<img src>`. Open reports on an isolated host with confidence.
-- **Offline first.** Threat‑intel lookups are opt‑in (`--online`); without it, nothing leaves the machine.
-- **System fonts only.** No remote font loading — the report renders consistently offline and stays self‑contained.
+- **Никаких внешних ссылок в отчёте.** URL из письма выводятся как инертный текст, никогда как живые `<a href>`/`<img src>`. Открывайте отчёты на изолированном хосте без опасений.
+- **Offline first.** Запросы threat‑intel — opt‑in (`--online`); без него с машины ничего не уходит.
+- **Только системные шрифты.** Никакой загрузки удалённых шрифтов — отчёт стабильно рендерится офлайн и остаётся самодостаточным.
 
 ---
 
-## Building a standalone binary
+## Сборка автономного бинаря
 
-For analysts without Python, build a portable artifact (scripts in [`build/`](build/)):
+Для аналитиков без Python соберите портативный артефакт (скрипты в [`build/`](build/)):
 
 ```bash
-# Cross-platform single-file zipapp (portable, AV-friendly)
-make pyz        # or: build/build.sh pyz
+# Кроссплатформенный однофайловый zipapp (НЕ флагается AV, компактный)
+make pyz        # или: build/build.sh pyz
 
-# Windows .exe (PyInstaller) — keep internal, allowlist by SHA-256 in your EDR
+# Windows .exe (PyInstaller) — держите внутри, allowlist по SHA-256 в EDR
 build\build.ps1
 ```
 
-> A standalone `.exe` is convenient for endpoints but is commonly heuristically flagged by AV/EDR. The recommended distribution is the `.py` (auditable) or `.pyz` (portable, AV‑friendly). See [`build/`](build/) for details.
+> Автономный `.exe` удобен для эндпоинтов, но часто эвристически флагается AV/EDR. Рекомендуемый способ распространения — `.py` (аудируемый) или `.pyz` (портативный, дружелюбный к AV). Подробности в [`build/`](build/).
 
 ---
 
 ## Roadmap
 
-- [ ] **ARC** chain validation (`Authentication-Results` survivability across hops)
-- [ ] **S/MIME & PGP** detection — signature presence, validity, and signer/sender mismatch
-- [ ] **QR‑code extraction & decoding** (quishing) from inline images and PDFs
-- [ ] YARA scanning of attachments (custom rule file)
-- [ ] **STIX 2.1** IOC export and aggregate batch dashboard
+- [ ] валидация цепочки **ARC** (выживаемость `Authentication-Results` между хопами)
+- [ ] детект **S/MIME & PGP** — наличие подписи, валидность, несовпадение signer/sender
+- [ ] **извлечение и декодирование QR‑кодов** (quishing) из inline‑картинок и PDF
+- [ ] YARA‑сканирование вложений (файл правил)
+- [ ] экспорт IOC в **STIX 2.1** и сводный dashboard для пакетных прогонов
 
-**Shipped in v1.1:** context‑aware attachment entropy · password‑protected archive detection with body‑password correlation.
-**Shipped in v1.2:** recursive archive extraction (ZIP / TAR / GZIP / 7z / RAR) with zip‑bomb guards and full nested re‑scan.
-
----
-
-## Contributing
-
-Issues and PRs welcome — detection rules, new magic signatures, brand/keyword additions, and false‑positive reports are especially useful. Keep changes self‑contained and dependency‑light; the design goals are *auditable, portable, offline‑capable*.
+**Реализовано в v1.1:** контекстная энтропия вложений · детект защищённых паролем архивов с корреляцией пароля из тела.
+**Реализовано в v1.2:** рекурсивная распаковка архивов (ZIP / TAR / GZIP / 7z / RAR) с защитой от zip‑bomb и полным повторным сканированием вложенного.
 
 ---
 
-## Disclaimer
+## Контрибьюшн
 
-MailInspector is a **defensive** tool for analysts with authorization to inspect the messages they process. It performs static analysis only and is not a substitute for sandbox detonation or full malware reversing. No warranty — see [LICENSE](LICENSE).
+Issues и PR приветствуются — особенно правила детекта, новые magic‑сигнатуры, дополнения брендов/ключевых слов и репорты ложных срабатываний. Держите изменения самодостаточными и лёгкими по зависимостям; цели дизайна — *аудируемость, портативность, работа офлайн*.
+
+---
+
+## Дисклеймер
+
+MailInspector — **оборонительный** инструмент для аналитиков, у которых есть право инспектировать обрабатываемые письма. Выполняет только статический анализ и не заменяет детонацию в песочнице или полный реверс вредоноса. Без гарантий — см. [LICENSE](LICENSE).
 
 ---
 
 <div align="center">
 
-**ZavetSec** · part of the ZavetSec DFIR toolkit
-Released under the [MIT License](LICENSE)
+**ZavetSec** · часть DFIR‑тулкита ZavetSec
+Распространяется под [лицензией MIT](LICENSE)
 
 </div>

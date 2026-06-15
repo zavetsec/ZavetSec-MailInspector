@@ -1,16 +1,16 @@
-# ZavetSec-MailInspector — dependencies
+# ZavetSec-MailInspector — зависимости
 # ---------------------------------------------------------------------------
-# Core .eml analysis runs on the Python standard library ALONE.
-# The packages below unlock full functionality and are recommended for SOC use.
-# If any is missing, the tool degrades gracefully and reports what it skipped.
+# Анализ .eml работает ТОЛЬКО на стандартной библиотеке Python.
+# Пакеты ниже разблокируют полный функционал и рекомендуются для SOC.
+# При отсутствии любого из них инструмент деградирует мягко и сообщает, что пропустил.
 # ---------------------------------------------------------------------------
 
-extract-msg>=0.45     # Outlook .msg parsing
-oletools>=0.60        # VBA macro detection in Office attachments (olevba)
-requests>=2.28        # optional online threat-intel enrichment (--online)
+extract-msg>=0.45     # разбор Outlook .msg
+oletools>=0.60        # детект VBA-макросов в Office-вложениях (olevba)
+requests>=2.28        # опциональный онлайн threat-intel (--online)
 
-# Optional — improves RAR archive coverage (RAR4 detection works without it):
+# Опционально — улучшает покрытие RAR (детект RAR4 работает и без неё):
 # rarfile>=4.0
 
-# Optional — recurse into 7-Zip archives:
+# Опционально — рекурсия в 7-Zip архивы:
 # py7zr>=0.20

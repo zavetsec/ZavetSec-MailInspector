@@ -1,32 +1,33 @@
-# Building standalone artifacts
+# Сборка автономных артефактов
 
-The canonical, recommended distribution is the **`.py` script** (auditable,
-runs everywhere `.eml` analysis needs only the stdlib). The helpers here build
-portable artifacts for analysts who don't have Python.
+Канонический, рекомендуемый способ распространения — **скрипт `.py`** (аудируемый,
+работает везде; анализу `.eml` нужна только стандартная библиотека). Хелперы здесь
+собирают портативные артефакты для аналитиков, у которых нет Python.
 
-## `.pyz` — portable, AV-friendly (recommended)
+## `.pyz` — портативный, дружелюбный к AV (рекомендуется)
 
-A native Python zipapp: a single portable file that is **not** heuristically flagged by antivirus the way a packed `.exe` is. Bundling `oletools` makes it ~30 MB; for a near-stdlib build, omit the optional deps.
+Нативный Python zipapp: один файл, компактный, **не** флагается антивирусом.
 
 ```bash
 build/build.sh pyz          # Linux/macOS
 build\build.ps1 -Target pyz # Windows
-# run: python ZavetSec-MailInspector.pyz message.eml -o report.html
+# запуск: python ZavetSec-MailInspector.pyz message.eml -o report.html
 ```
 
-Requires Python on the target host.
+Требует Python на целевом хосте. Включение `oletools` делает файл ~30 МБ; для
+сборки, близкой к stdlib, опустите опциональные зависимости.
 
-## `.exe` — no Python required (internal use)
+## `.exe` — Python не нужен (для внутреннего использования)
 
 ```bash
-build/build.sh exe          # Linux (cross-build not supported; build on Windows for Windows)
+build/build.sh exe          # Linux (кросс-сборка не поддерживается; для Windows собирайте на Windows)
 build\build.ps1             # Windows -> dist\ZavetSec-MailInspector.exe
 ```
 
-> An unsigned single-file PyInstaller binary unpacks an interpreter at runtime,
-> which AV/EDR heuristics frequently flag (false positive). Recommended handling:
-> **allowlist the build by SHA-256** in your endpoint policy rather than shipping
-> it publicly. `build.ps1` prints the SHA-256 after a successful build.
+> Неподписанный однофайловый бинарь PyInstaller распаковывает интерпретатор в рантайме,
+> что эвристики AV/EDR часто флагают (false positive). Рекомендуемая обработка —
+> **allowlist сборки по SHA-256** в политике эндпоинта, а не публичная раздача
+> бинаря. `build.ps1` печатает SHA-256 после успешной сборки.
 
-`--collect-submodules` for `oletools` and `extract_msg` is required — both load
-modules dynamically, and onefile builds fail at runtime without it.
+`--collect-submodules` для `oletools` и `extract_msg` обязателен — оба подгружают
+модули динамически, и onefile-сборки падают в рантайме без него.

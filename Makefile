@@ -5,13 +5,13 @@ SRC  := ZavetSec-MailInspector.py
 .PHONY: help install run demo pyz exe clean
 
 help:
-	@echo "Targets:"
-	@echo "  install   pip install optional dependencies"
-	@echo "  demo      run against the bundled sample e-mail"
-	@echo "  run F=..  run against file F (e.g. make run F=msg.eml)"
-	@echo "  pyz       build portable single-file .pyz (AV-friendly)"
-	@echo "  exe       build single-file .exe (PyInstaller)"
-	@echo "  clean     remove build artifacts"
+	@echo "Цели:"
+	@echo "  install   установить опциональные зависимости"
+	@echo "  demo      прогон на встроенном примере письма"
+	@echo "  run F=..  прогон на файле F (напр. make run F=msg.eml)"
+	@echo "  pyz       собрать портативный .pyz (дружелюбный к AV)"
+	@echo "  exe       собрать однофайловый .exe (PyInstaller)"
+	@echo "  clean     удалить артефакты сборки"
 
 install:
 	pip install -r requirements.txt
