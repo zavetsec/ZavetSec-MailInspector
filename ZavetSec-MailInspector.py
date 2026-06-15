@@ -72,7 +72,20 @@ try:
 except Exception:
     HAVE_PY7ZR = False
 
-VERSION = "1.2"
+try:
+    import cv2  # type: ignore
+    import numpy as np  # type: ignore
+    HAVE_QR = True
+except Exception:
+    HAVE_QR = False
+
+try:
+    import fitz  # PyMuPDF  # type: ignore
+    HAVE_PYMUPDF = True
+except Exception:
+    HAVE_PYMUPDF = False
+
+VERSION = "1.3"
 
 # Recursive-extraction safety limits (zip-bomb / resource guards)
 MAX_ARCHIVE_DEPTH = 3                       # nesting depth (zip-in-zip-in-zip)
@@ -81,6 +94,7 @@ MAX_TOTAL_EXTRACT = 256 * 1024 * 1024        # 256 MB cumulative budget
 MAX_FILE_EXTRACT = 64 * 1024 * 1024          # 64 MB per extracted entry
 ZIP_BOMB_RATIO = 100                          # uncompressed/compressed ratio alarm
 ZIP_BOMB_MIN_UNCOMPRESSED = 50 * 1024 * 1024  # only alarm above this size
+MAX_PDF_PAGES = 25                             # QR scan: max PDF pages to rasterize
 
 # --------------------------------------------------------------------------- #
 #  Severity model
@@ -160,15 +174,130 @@ SUSPICIOUS_TLD = {
 }
 
 # Brand keywords for display-name / lookalike impersonation (EN + RU/CIS)
-BRANDS = [
-    "microsoft", "office365", "office 365", "outlook", "onedrive", "sharepoint",
-    "windows", "azure", "google", "gmail", "apple", "icloud", "amazon", "aws",
-    "paypal", "netflix", "facebook", "instagram", "whatsapp", "linkedin",
-    "dropbox", "docusign", "adobe", "fedex", "dhl", "ups", "usps", "ebay",
-    "binance", "coinbase", "metamask", "telegram", "github", "gitlab",
-    "sberbank", "sber", "tinkoff", "alfabank", "alfa", "vtb", "gosuslugi",
-    "yandex", "mail.ru", "kaspi", "halyk", "wildberries", "ozon", "cdek",
-    "pochta", "nalog", "fns", "mvd", "rosreestr", "kaspersky",
+# Brand impersonation. Each entry: (display aliases, expected domain tokens).
+# Display aliases are matched (substring, lowercased) against the display-name;
+# domain tokens are the strings a legitimate domain for that brand would contain.
+# A brand is "impersonated" when an alias is in the display-name but NONE of the
+# expected domain tokens are in the sender domain. This avoids false positives on
+# legitimate mail (e.g. "Сбербанк" <noreply@sberbank.ru>: alias matches, but the
+# token "sber" IS in the domain, so it is not flagged).
+BRAND_ALIASES = [
+    # --- Russian / CIS banks & gov ---
+    (["сбербанк", "сбер", "sberbank", "sber"], ["sber"]),
+    (["тинькофф", "т-банк", "тбанк", "tinkoff", "tbank"], ["tinkoff", "tbank"]),
+    (["альфа-банк", "альфабанк", "alfabank", "alfa-bank", "alfa"], ["alfabank", "alfa"]),
+    (["втб", "vtb"], ["vtb"]),
+    (["газпромбанк", "gazprombank"], ["gazprombank", "gpb"]),
+    (["райффайзен", "raiffeisen"], ["raif"]),
+    (["открытие", "otkritie"], ["otkritie", "open.ru"]),
+    (["совкомбанк", "sovcombank"], ["sovcombank"]),
+    (["почта банк", "pochtabank"], ["pochtabank"]),
+    (["госуслуги", "госуслуг", "gosuslugi"], ["gosuslugi", "gosuslug"]),
+    (["налоговая", "фнс", "nalog"], ["nalog", "fns"]),
+    (["пенсионный фонд", "сфр", "пфр", "социальный фонд"], ["sfr", "pfr"]),
+    (["мвд", "mvd"], ["mvd"]),
+    (["росреестр", "rosreestr"], ["rosreestr"]),
+    # --- Named RF government agencies (frequent impersonation targets) ---
+    (["минстрой", "министерство строительства"], ["minstroy", "gov.ru"]),
+    (["минцифры", "министерство цифрового"], ["mincifry", "digital.gov.ru", "gov.ru"]),
+    (["минздрав", "министерство здравоохранения"], ["minzdrav", "rosminzdrav", "gov.ru"]),
+    (["минфин", "министерство финансов"], ["minfin", "gov.ru"]),
+    (["минтруд", "министерство труда"], ["mintrud", "rosmintrud", "gov.ru"]),
+    (["минобрнауки", "минпросвещения", "министерство образования"], ["edu.gov.ru", "gov.ru"]),
+    (["мчс"], ["mchs", "gov.ru"]),
+    (["фссп", "судебных приставов"], ["fssp", "gov.ru"]),
+    (["гибдд", "госавтоинспекц"], ["gibdd", "гибдд", "gov.ru"]),
+    (["роспотребнадзор"], ["rospotrebnadzor", "gov.ru"]),
+    (["роскомнадзор", "ркн"], ["rkn", "rsoc", "gov.ru"]),
+    (["ростехнадзор"], ["gosnadzor", "gov.ru"]),
+    (["прокуратура", "генпрокуратура"], ["genproc", "epp.genproc", "gov.ru"]),
+    (["следственный комитет", "ск рф"], ["sledcom", "gov.ru"]),
+    (["таможн", "фтс"], ["customs", "tks", "gov.ru"]),
+    # --- Kazakhstan gov / e-services ---
+    (["egov", "егов", "электронное правительство"], ["egov.kz", "gov.kz"]),
+    (["кгд", "комитет государственных доходов"], ["kgd.gov.kz", "gov.kz"]),
+    (["enpf", "енпф"], ["enpf.kz"]),
+    # --- Russian marketplaces / services ---
+    (["авито", "avito"], ["avito"]),
+    (["озон", "ozon"], ["ozon"]),
+    (["вайлдберриз", "wildberries", "вайлдберис"], ["wildberries", "wildberry"]),
+    (["яндекс", "yandex"], ["yandex", "ya.ru"]),
+    (["mail.ru", "майл"], ["mail.ru"]),
+    (["вконтакте", "vkontakte"], ["vk.com", "vk.ru", "vkontakte"]),
+    (["одноклассники", "odnoklassniki"], ["ok.ru", "odnoklassniki"]),
+    (["почта россии", "russianpost"], ["pochta", "russianpost"]),
+    (["сдэк", "cdek"], ["cdek"]),
+    (["qiwi", "киви"], ["qiwi"]),
+    (["юмани", "yoomoney", "яндекс деньги"], ["yoomoney"]),
+    (["мтс", "mts"], ["mts"]),
+    (["мегафон", "megafon"], ["megafon"]),
+    (["билайн", "beeline"], ["beeline"]),
+    (["ростелеком", "rostelecom"], ["rostelecom"]),
+    (["теле2", "tele2"], ["tele2"]),
+    (["мвидео", "mvideo"], ["mvideo"]),
+    (["днс-шоп", "dns-shop"], ["dns-shop", "dnsshop"]),
+    (["kaspi", "каспи"], ["kaspi"]),
+    (["halyk", "халык"], ["halyk"]),
+    (["kaspersky", "касперск"], ["kaspersky"]),
+    # --- Global ---
+    (["microsoft", "office365", "office 365", "майкрософт", "outlook", "onedrive"],
+     ["microsoft", "office", "live", "outlook", "onedrive"]),
+    (["google", "gmail", "гугл"], ["google", "gmail"]),
+    (["apple", "icloud", "айклауд", "эпл"], ["apple", "icloud"]),
+    (["paypal", "пейпал"], ["paypal"]),
+    (["amazon", "амазон", "aws"], ["amazon", "aws"]),
+    (["netflix", "нетфликс"], ["netflix"]),
+    (["telegram", "телеграм", "телеграмм"], ["telegram", "t.me"]),
+    (["whatsapp", "ватсап", "вотсап"], ["whatsapp"]),
+    (["instagram", "инстаграм"], ["instagram"]),
+    (["facebook", "фейсбук"], ["facebook", "fb.com"]),
+    (["linkedin"], ["linkedin"]),
+    (["dropbox", "дропбокс"], ["dropbox"]),
+    (["docusign"], ["docusign"]),
+    (["binance", "бинанс"], ["binance"]),
+    (["coinbase"], ["coinbase"]),
+    (["steam", "стим"], ["steam", "steampowered"]),
+    (["github"], ["github"]),
+    (["dhl"], ["dhl"]),
+    (["fedex"], ["fedex"]),
+]
+
+# Government-body impersonation. If the display-name claims a government body but
+# the sender domain is NOT on a government domain, it is likely impersonation —
+# this catches the long tail of ministries / committees not listed individually.
+GOV_DOMAIN_MARKERS = (
+    "gov.ru", "gosuslugi.ru", "mil.ru", "gov.kz", "egov.kz", "gov.by",
+    ".gov", ".gob.", ".gouv.", "government", "kremlin.ru", "council.gov.ru",
+    "duma.gov.ru", "mos.ru", "mosreg.ru",
+    # Specific legitimate .рф government domains (Unicode + punycode/ACE forms),
+    # NOT the whole .рф TLD — a phisher could register an arbitrary .рф domain.
+    "мвд.рф", "xn--b1aew.xn--p1ai",
+    "мчс.рф", "xn--l1akr.xn--p1ai",
+    "президент.рф", "xn--d1abbgf6aiiy.xn--p1ai",
+    "госуслуги.рф", "xn--c1aapkosapc.xn--p1ai",
+    "правительство.рф", "xn--80aealotwbjpid2k.xn--p1ai",
+    "фсб.рф", "xn--90a5ai.xn--p1ai",
+    "gov.рф", "gov.xn--p1ai",
+)
+GOV_TERMS = [
+    "министерство", "министерства", "минздрав", "минстрой", "минцифры", "минфин",
+    "минтруд", "минобрнауки", "минпросвещения", "минэнерго", "минпромторг",
+    "минсельхоз", "минтранс", "минюст", "минобороны", "минэкономразвития",
+    "мвд", "мчс", "фсб", "фнс", "фссп", "гибдд", "фтс", "следственный комитет",
+    "федеральная служба", "федеральное агентство", "федеральная налоговая",
+    "налоговая служба", "роспотребнадзор", "роскомнадзор", "ростехнадзор",
+    "рособрнадзор", "росфинмониторинг", "росстат", "роструд",
+    "пенсионный фонд", "социальный фонд", "фонд социального страхования",
+    "прокуратура", "генеральная прокуратура", "следственный комитет",
+    "государственная инспекция", "жилищная инспекция", "трудовая инспекция",
+    "госкомитет", "комитет по", "комитет государственного", "комитет государственных",
+    "департамент жилищной", "департамент строительства", "управление делами",
+    "администрация города", "администрация района", "администрация президента",
+    "правительство", "аппарат правительства", "судебный участок", "мировой судья",
+    "арбитражный суд", "районный суд", "верховный суд", "судебных приставов",
+    "госавтоинспекц", "таможенная служба", "федеральная таможенная",
+    "акимат", "министерство кз", "комитет государственных доходов",
+    "электронное правительство", "единый портал",
 ]
 
 SE_KEYWORDS = [
@@ -183,14 +312,48 @@ SE_KEYWORDS = [
     "confirm payment", "you have won", "claim your", "tax refund", "refund",
     "voicemail", "fax", "shared a document", "view document", "secure message",
     # Russian / CIS
-    "срочно", "немедленно", "подтвердите", "подтвердить", "ваш аккаунт",
-    "учётная запись", "учетная запись", "заблокирован", "блокировка",
-    "подозрительн", "вход в аккаунт", "сменить пароль", "сбросить пароль",
-    "обновите данные", "проблема с оплатой", "счёт во вложении", "счет на оплату",
-    "нажмите здесь", "перейдите по ссылке", "ограниченное время", "последнее уведомление",
-    "несанкционированн", "верифик", "подтверждение оплаты", "вы выиграли",
-    "получите", "возврат налога", "налоговая", "штраф", "задолженность",
-    "перевод средств", "криптовалют", "биткоин", "госуслуги", "выплата",
+    "срочно", "немедленно", "в течение 24 часов", "в течение 24 ч", "истекает срок",
+    "истёк срок", "срок действия истекает", "последнее предупреждение",
+    "последнее уведомление", "важное уведомление", "срочное уведомление",
+    "подтвердите", "подтвердить", "подтвердите личность", "подтвердите данные",
+    "подтвердите операцию", "отмените операцию", "подтвердите вход",
+    "ваш аккаунт", "ваша учётная запись", "учётная запись", "учетная запись",
+    "будет заблокирован", "будет удалён", "будет удалена", "заблокирован",
+    "блокировка", "ваш аккаунт заблокирован", "восстановите доступ",
+    "восстановить доступ", "разблокировать", "подозрительн", "подозрительная активность",
+    "обнаружен вход", "зафиксирован вход", "вход с нового устройства",
+    "вход с неизвестного устройства", "если это были не вы", "вход в аккаунт",
+    "служба безопасности", "служба поддержки", "техническая поддержка",
+    "сменить пароль", "сбросить пароль", "смените пароль", "срок действия пароля",
+    "пароль истекает", "обновите данные", "обновите платёжные данные",
+    "обновить реквизиты", "проблема с оплатой", "оплата не прошла",
+    "платёж отклонён", "просроченный платёж", "подтверждение оплаты",
+    "счёт во вложении", "счёт на оплату", "счет на оплату", "акт сверки",
+    "нажмите здесь", "нажмите на ссылку", "перейдите по ссылке", "пройдите по ссылке",
+    "перейти к оплате", "ограниченное время", "только сегодня", "акция заканчивается",
+    "успейте", "несанкционированн", "верифик", "пройдите верификацию",
+    "требуется подтверждение", "требуется верификация", "вы выиграли",
+    "поздравляем, вы выиграли", "ваш номер выиграл", "получите приз", "забрать приз",
+    "получите", "вам положена выплата", "вам начислена выплата", "социальная выплата",
+    "компенсация", "вам положена компенсация", "возврат налога", "возврат ндфл",
+    "налоговый вычет", "перерасчёт", "субсидия", "пособие", "налоговая",
+    "задолженность", "налоговая задолженность", "штраф", "штрафы гибдд",
+    "неоплаченный штраф", "перевод средств", "криптовалют", "биткоин",
+    "кэшбэк", "бонусы сгорают", "бонусные баллы", "ваша посылка", "ваш заказ",
+    "таможенный сбор", "доставка приостановлена", "получить посылку",
+    "новое сообщение", "вам пришло сообщение", "защищённый документ",
+    "просмотреть документ", "госуслуги", "выплата", "продлите подписку",
+    "подписка истекает", "ваш ящик переполнен", "превышен лимит",
+    # Government / legal lures
+    "решение суда", "судебное решение", "судебный приказ", "исполнительное производство",
+    "исполнительный лист", "повестка", "вызов в суд", "явка обязательна",
+    "административное правонарушение", "постановление", "предписание", "предостережение",
+    "требование об уплате", "налоговое уведомление", "уведомление о задолженности",
+    "уведомление о проверке", "внеплановая проверка", "акт проверки", "протокол",
+    "арест счёта", "арест на счёт", "арест имущества", "взыскание", "пени",
+    "налоговый вычет", "льгота", "перерасчёт", "материнский капитал",
+    "субсидия на оплату", "единое пособие", "проиндексирована", "запись на приём",
+    "подтвердите учётную запись госуслуг", "заявление принято", "статус заявления",
 ]
 
 # Confusable-script detection: which scripts a codepoint belongs to
@@ -442,6 +605,48 @@ def get_bodies(msg, rep):
     return plain, html
 
 
+def analyze_url(href, host, text, rep, source="body"):
+    """Run all URL-level phishing checks on a single link. `source` is 'body' or
+    'QR' (quishing); QR-derived findings are tagged in the detail text."""
+    if not host:
+        return
+    src = "[из QR] " if source == "QR" else ""
+    rep.iocs["urls"].add(href)
+    rep.iocs["domains"].add(host)
+    tail = host.rsplit(".", 1)[-1] if "." in host else ""
+
+    if IP_RE.fullmatch(host):
+        rep.add("URL", SEV_HIGH, "Ссылка ведёт на IP-адрес, а не на домен", f"{src}{href}")
+        rep.iocs["ips"].add(host)
+    if "@" in href.split("//", 1)[-1].split("/", 1)[0]:
+        rep.add("URL", SEV_HIGH, "В URL присутствует символ '@' (сокрытие реального хоста)", f"{src}{href}")
+    if "xn--" in host:
+        rep.add("URL", SEV_HIGH, "Punycode/IDN-домен (возможен homograph-фишинг)", f"{src}{host}  ({href})")
+    scr = _char_scripts(host.replace(".", ""))
+    if "Latin" in scr and ("Cyrillic" in scr or "Greek" in scr):
+        rep.add("URL", SEV_HIGH, "Домен смешивает алфавиты (Latin + Cyrillic/Greek) — homoglyph", f"{src}{host}  ({href})")
+    if _registrable_tail(host) in URL_SHORTENERS:
+        rep.add("URL", SEV_MED, "Сокращатель ссылок (реальная цель скрыта)", f"{src}{href}")
+    if tail in SUSPICIOUS_TLD:
+        rep.add("URL", SEV_LOW, f"Подозрительный/дешёвый TLD .{tail}", f"{src}{host}")
+    if text:
+        t_host = _host_of(text) if ("." in text and " " not in text.strip()) else ""
+        if t_host and t_host != host and not host.endswith("." + t_host) and not t_host.endswith("." + host):
+            rep.add("URL", SEV_HIGH, "Текст ссылки не совпадает с реальным адресом (link spoofing)",
+                    f"{src}показано: {text}  →  ведёт на: {href}")
+    labels = host.split(".")
+    if len(labels) >= 5:
+        rep.add("URL", SEV_LOW, "Много поддоменов (обфускация хоста)", f"{src}{host}")
+    for aliases, tokens in BRAND_ALIASES:
+        hit = next((t for t in tokens if t.replace(".", "") in host.replace(".", "")
+                    and t.replace(".", "") not in _registrable_tail(host).replace(".", "")), None)
+        if hit:
+            rep.add("URL", SEV_MED, f"Бренд «{aliases[0]}» в поддомене, но не в основном домене", f"{src}{host}")
+            break
+    if href.lower().startswith(("data:", "javascript:", "vbscript:")):
+        rep.add("URL", SEV_HIGH, "Опасная схема URI (data:/javascript:/vbscript:)", f"{src}{href[:120]}")
+
+
 def analyze_body(plain, html, rep):
     urls = []
     seen = set()
@@ -467,70 +672,8 @@ def analyze_body(plain, html, rep):
     rep.urls = urls
 
     # ---- URL-level findings ----
-    from_dom = rep.from_addr.split("@")[-1] if "@" in rep.from_addr else ""
     for u in urls:
-        href, host, text = u["href"], u["host"], u["text"]
-        if not host:
-            continue
-        rep.iocs["urls"].add(href)
-        rep.iocs["domains"].add(host)
-
-        tail = host.rsplit(".", 1)[-1] if "." in host else ""
-
-        # IP-literal URL
-        if IP_RE.fullmatch(host):
-            rep.add("URL", SEV_HIGH, "Ссылка ведёт на IP-адрес, а не на домен",
-                    f"{href}")
-            rep.iocs["ips"].add(host)
-
-        # user:pass@ obfuscation
-        if "@" in href.split("//", 1)[-1].split("/", 1)[0]:
-            rep.add("URL", SEV_HIGH, "В URL присутствует символ '@' (сокрытие реального хоста)",
-                    f"{href}")
-
-        # punycode / IDN
-        if "xn--" in host:
-            rep.add("URL", SEV_HIGH, "Punycode/IDN-домен (возможен homograph-фишинг)",
-                    f"{host}  ({href})")
-
-        # mixed-script confusable
-        scr = _char_scripts(host.replace(".", ""))
-        if "Latin" in scr and ("Cyrillic" in scr or "Greek" in scr):
-            rep.add("URL", SEV_HIGH, "Домен смешивает алфавиты (Latin + Cyrillic/Greek) — homoglyph",
-                    f"{host}  ({href})")
-
-        # shortener
-        if _registrable_tail(host) in URL_SHORTENERS:
-            rep.add("URL", SEV_MED, "Сокращатель ссылок (реальная цель скрыта)",
-                    f"{href}")
-
-        # suspicious TLD
-        if tail in SUSPICIOUS_TLD:
-            rep.add("URL", SEV_LOW, f"Подозрительный/дешёвый TLD .{tail}", f"{host}")
-
-        # display vs href mismatch
-        if text:
-            t_host = _host_of(text) if ("." in text and " " not in text.strip()) else ""
-            if t_host and t_host != host and not host.endswith("." + t_host) and not t_host.endswith("." + host):
-                rep.add("URL", SEV_HIGH,
-                        "Текст ссылки не совпадает с реальным адресом (link spoofing)",
-                        f"показано: {text}  →  ведёт на: {href}")
-
-        # excessive subdomains / brand in subdomain
-        labels = host.split(".")
-        if len(labels) >= 5:
-            rep.add("URL", SEV_LOW, "Много поддоменов (обфускация хоста)", f"{host}")
-        for b in BRANDS:
-            bclean = b.replace(" ", "")
-            if bclean in host.replace(".", "") and bclean not in _registrable_tail(host).replace(".", ""):
-                rep.add("URL", SEV_MED, f"Бренд «{b}» в поддомене, но не в основном домене",
-                        f"{host}")
-                break
-
-        # data: / javascript: URIs
-        if href.lower().startswith(("data:", "javascript:", "vbscript:")):
-            rep.add("URL", SEV_HIGH, "Опасная схема URI (data:/javascript:/vbscript:)",
-                    f"{href[:120]}")
+        analyze_url(u["href"], u["host"], u["text"], rep, source="body")
 
     # tracking pixels & hidden links
     if re.search(r'<img[^>]+(?:width|height)\s*=\s*["\']?[01]\b', html or "", re.I):
@@ -607,13 +750,25 @@ def analyze_headers(rep):
             rep.add("HEADER", SEV_HIGH, "Display-name содержит чужой e-mail",
                     f"имя: «{name}»   реальный адрес: {fa}")
             break
-    # brand in display name but not in domain
+    # brand in display name but the sender domain is unrelated to that brand
     low_name = name.lower()
-    for b in BRANDS:
-        if b in low_name and from_dom and b.replace(" ", "") not in from_dom.replace(".", ""):
-            rep.add("HEADER", SEV_MED, f"Имя отправителя имитирует бренд «{b}»",
-                    f"имя: «{name}»   домен: {from_dom}")
-            break
+    brand_flagged = False
+    if from_dom:
+        for aliases, tokens in BRAND_ALIASES:
+            if any(a in low_name for a in aliases) and not any(t in from_dom for t in tokens):
+                rep.add("HEADER", SEV_MED, f"Имя отправителя имитирует бренд «{aliases[0]}»",
+                        f"имя: «{name}»   домен: {from_dom}")
+                brand_flagged = True
+                break
+
+    # government-body impersonation: display-name claims a state body, but the
+    # sender domain is not a government domain (catches ministries / committees
+    # not listed individually above)
+    if from_dom and not brand_flagged:
+        gov_hit = next((t for t in GOV_TERMS if t in low_name), None)
+        if gov_hit and not any(m in from_dom for m in GOV_DOMAIN_MARKERS):
+            rep.add("HEADER", SEV_MED, "Имя отправителя имитирует госорган, домен не государственный",
+                    f"имя: «{name}»   домен: {from_dom} (не gov.ru/gosuslugi.ru/gov.kz/…)")
 
     # Message-ID domain vs From domain
     if rep.message_id and from_dom:
@@ -888,7 +1043,7 @@ def detect_body_password(plain, html, subject):
             if 2 <= len(token) <= 40 and "http" not in token.lower():
                 return token
     # mention without explicit token
-    if re.search(r"\b(?:password[- ]?protected|защищ\w+\s+паролем|запаролен)\b",
+    if re.search(r"\b(?:password[- ]?protected|защищ\w+\s+паролем|запаролен|пароль\s+от\s+архива|пароль\s+для\s+распаковки|пароль\s+в\s+теме)\b",
                  corpus, re.I):
         return "(mentioned)"
     return None
@@ -896,6 +1051,105 @@ def detect_body_password(plain, html, subject):
 
 def _basename(name):
     return name.replace("\\", "/").rstrip("/").split("/")[-1] or name
+
+
+# --------------------------------------------------------------------------- #
+#  QR / quishing — decode QR codes in image and PDF attachments
+# --------------------------------------------------------------------------- #
+IMG_EXT = {"png", "jpg", "jpeg", "gif", "bmp", "webp", "tif", "tiff", "ico"}
+
+
+def _looks_image(data, ext):
+    if ext in IMG_EXT:
+        return True
+    h = data[:16]
+    return (h.startswith(b"\x89PNG") or h.startswith(b"\xff\xd8\xff")
+            or h.startswith(b"GIF8") or h.startswith(b"BM")
+            or (h[:4] == b"RIFF" and b"WEBP" in h)
+            or h.startswith(b"II*\x00") or h.startswith(b"MM\x00*"))
+
+
+def _decode_qr(data):
+    """Return list of decoded QR payloads from raw image bytes (best-effort)."""
+    if not HAVE_QR:
+        return []
+    try:
+        arr = np.frombuffer(data, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return []
+        det = cv2.QRCodeDetector()
+        out = []
+        try:
+            ok, infos, _pts, _ = det.detectAndDecodeMulti(img)
+            if ok:
+                out = [s for s in infos if s]
+        except Exception:
+            out = []
+        if not out:
+            s, _pts, _ = det.detectAndDecode(img)
+            if s:
+                out = [s]
+        return out
+    except Exception:
+        return []
+
+
+def _qr_from_pdf(data):
+    """Rasterize PDF pages and decode any QR codes (best-effort, bounded)."""
+    if not (HAVE_QR and HAVE_PYMUPDF):
+        return []
+    out = []
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        for i, page in enumerate(doc):
+            if i >= MAX_PDF_PAGES:
+                break
+            try:
+                pix = page.get_pixmap(dpi=150)
+                out += _decode_qr(pix.tobytes("png"))
+            except Exception:
+                continue
+        doc.close()
+    except Exception:
+        pass
+    # de-dupe preserving order
+    seen, uniq = set(), []
+    for s in out:
+        if s not in seen:
+            seen.add(s)
+            uniq.append(s)
+    return uniq
+
+
+def _scan_qr_payloads(data, ext, label, disp, rep):
+    """Decode QR codes in an image/PDF attachment and run any URLs through the
+    URL detectors (quishing). Returns the number of QR codes found."""
+    if _looks_image(data, ext):
+        payloads = _decode_qr(data)
+    elif label == "PDF document" or ext == "pdf" or data[:4] == b"%PDF":
+        payloads = _qr_from_pdf(data)
+    else:
+        return 0
+    for pl in payloads:
+        pl = (pl or "").strip()
+        if not pl:
+            continue
+        is_url = bool(re.match(r"(?i)^(https?://|www\.)", pl)) or \
+            (("." in _host_of(pl)) and " " not in pl and "/" in pl and len(pl) < 400)
+        if is_url:
+            host = _host_of(pl)
+            from_dom = rep.from_addr.split("@")[-1] if "@" in rep.from_addr else ""
+            unrelated = host and from_dom and _registrable_tail(host) != _registrable_tail(from_dom)
+            sev = SEV_MED if unrelated else SEV_LOW
+            rep.add("ATTACH", sev, "QR-код содержит ссылку (возможный quishing)",
+                    f"{disp}: {pl[:160]}")
+            rep.urls.append({"text": "[QR]", "href": pl, "host": host})
+            analyze_url(pl, host, "", rep, source="QR")
+        else:
+            rep.add("ATTACH", SEV_LOW, "QR-код содержит данные",
+                    f"{disp}: {pl[:80]}")
+    return len(payloads)
 
 
 # --------------------------------------------------------------------------- #
@@ -1212,6 +1466,10 @@ def _scan_unit(data, disp_path, fname, rep, save_dir, depth, ctx):
                           " | ".join(s.split(":")[0] for s in mac["suspicious"][:6])
             rep.add("ATTACH", sev, f"Office-файл содержит VBA-макросы: {disp}",
                     detail or "обнаружены макросы")
+
+    # QR / quishing — decode QR in image and PDF attachments
+    if HAVE_QR:
+        _scan_qr_payloads(data, ext, label, disp, rep)
 
     if save_dir:
         try:

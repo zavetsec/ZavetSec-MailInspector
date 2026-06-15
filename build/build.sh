@@ -9,7 +9,7 @@ NAME="ZavetSec-MailInspector"
 build_pyz() {
   echo "[*] Сборка портативного .pyz (zipapp, дружелюбный к AV)..."
   rm -rf build/deps && mkdir -p build/deps
-  pip install --target build/deps extract-msg oletools requests py7zr -q
+  pip install --target build/deps extract-msg oletools requests py7zr opencv-python-headless pymupdf -q
   cp "$SRC" build/deps/__main__.py
   python3 -m zipapp build/deps -p "/usr/bin/env python3" -o "${NAME}.pyz"
   echo "[+] Готово: ${NAME}.pyz"
@@ -19,7 +19,7 @@ build_pyz() {
 build_exe() {
   echo "[*] Сборка однофайлового .exe (PyInstaller)..."
   echo "    ПРИМЕЧАНИЕ: неподписанный exe часто флагается AV/EDR — allowlist по SHA-256."
-  pip install pyinstaller extract-msg oletools requests py7zr -q
+  pip install pyinstaller extract-msg oletools requests py7zr opencv-python-headless pymupdf -q
   pyinstaller --onefile --name "$NAME" \
     --hidden-import oletools.olevba --hidden-import extract_msg \
     --collect-submodules oletools --collect-submodules extract_msg \
